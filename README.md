@@ -6,8 +6,8 @@
 
 Born from a pentest finding. Built to make sure it doesn't happen again.
 
-**Scan.Detect.Secure.**
-Find Exposed Secrets Before Attackers Do LeakLens scans your internal file shares to detect passwords, hashes, API keys, and sensitive identifiers
+**ScanDetectSecure** Find Exposed Secrets Before Attackers Do LeakLens scans your internal file shares to detect passwords, hashes, API keys, and sensitive identifiers
+
 ---
 
 ## Requirements
