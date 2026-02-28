@@ -69,29 +69,31 @@ CONTENT_PATTERNS = [
     {
         "id": "base64_credential",
         "name": "Base64 Credential",
+        # Lowered to 5 — base64 near a keyword is ambiguous (session IDs, checksums, etc.)
         "regex": r'(?i)(password|secret|token|key)\s*[=:]\s*[A-Za-z0-9+/]{20,}={0,2}',
-        "confidence": 7,
-        "risk": "HIGH",
+        "confidence": 5,
+        "risk": "MEDIUM",
     },
     {
         "id": "aws_access_key",
         "name": "AWS Access Key",
-        # AKIA + 16 alphanumeric (real key is 20 chars total); allow 14-18 to catch test/obfuscated keys
-        "regex": r'\bAKIA[0-9A-Z]{14,18}\b',
+        # Real AWS access keys are always exactly 20 chars: AKIA + 16 uppercase alphanumeric
+        "regex": r'\bAKIA[0-9A-Z]{16}\b',
         "confidence": 9,
         "risk": "HIGH",
     },
     {
         "id": "generic_api_key",
         "name": "Generic API Key/Token",
-        "regex": r'(?i)(api[_-]?key|bearer|access[_-]?token)\s*[=:]\s*\S{10,}',
+        # Minimum 20 chars to reduce noise; placeholder lookahead added; bearer removed (covered by bearer_token_value)
+        "regex": r'(?i)(api[_-]?key|access[_-]?token)\s*[=:]\s*(?!["\']?\s*(changeme|test|example|placeholder|dummy|none|null|\*{3,}|<[^>]+>))["\']?\S{20,}["\']?',
         "confidence": 6,
         "risk": "MEDIUM",
     },
     {
         "id": "bearer_token_value",
         "name": "Bearer Token",
-        # Detects Bearer tokens used as values: Authorization: Bearer <token> or API_TOKEN = "Bearer eyJ..."
+        # Detects Bearer tokens used as values: Authorization: Bearer <token> or TOKEN = "Bearer eyJ..."
         "regex": r'(?i)Bearer\s+[A-Za-z0-9._\-+/=]{20,}',
         "confidence": 6,
         "risk": "MEDIUM",
@@ -113,9 +115,10 @@ CONTENT_PATTERNS = [
     {
         "id": "ps_secure_string",
         "name": "PowerShell SecureString",
-        "regex": r'(?i)(ConvertTo-SecureString|ConvertFrom-SecureString)',
-        "confidence": 6,
-        "risk": "MEDIUM",
+        # Only fires when a string literal is hardcoded — not on legitimate Read-Host or pipeline usage
+        "regex": r'(?i)ConvertTo-SecureString\s+["\'][^"\']{4,}["\']',
+        "confidence": 7,
+        "risk": "HIGH",
     },
     {
         "id": "hardcoded_pscredential",
@@ -129,6 +132,69 @@ CONTENT_PATTERNS = [
         "name": "SQL sa Password",
         "regex": r'(?i)(sa|sysadmin)\s+password\s*[=:]\s*\S+',
         "confidence": 8,
+        "risk": "HIGH",
+    },
+    {
+        "id": "github_pat",
+        "name": "GitHub Personal Access Token",
+        # ghp_ = classic PAT, gho_ = OAuth token, ghs_ = GitHub Actions secret
+        "regex": r'\b(ghp_|gho_|ghs_)[A-Za-z0-9]{36}\b',
+        "confidence": 10,
+        "risk": "HIGH",
+    },
+    {
+        "id": "gitlab_pat",
+        "name": "GitLab Personal Access Token",
+        "regex": r'\bglpat-[A-Za-z0-9\-_]{20}\b',
+        "confidence": 10,
+        "risk": "HIGH",
+    },
+    {
+        "id": "azure_client_secret",
+        "name": "Azure Client Secret",
+        "regex": r'(?i)(client[_-]?secret|clientsecret)\s*[=:]\s*["\']?[A-Za-z0-9\-._~]{34,40}["\']?',
+        "confidence": 7,
+        "risk": "HIGH",
+    },
+    {
+        "id": "azure_storage_key",
+        "name": "Azure Storage Account Key",
+        # Storage account keys are 88-char base64 strings ending in ==
+        "regex": r'[A-Za-z0-9+/]{86}==',
+        "confidence": 8,
+        "risk": "HIGH",
+    },
+    {
+        "id": "dpapi_blob",
+        "name": "DPAPI Encrypted Blob",
+        # AQAAANCMnd8BFdERjHoAwE is the base64-encoded header of every DPAPI blob
+        # 01000000d08c9ddf is the same header in hex — presence on a share means it was exported
+        "regex": r'(?i)(AQAAANCMnd8BFdERjHoAwE|01000000d08c9ddf)',
+        "confidence": 8,
+        "risk": "HIGH",
+    },
+    {
+        "id": "stripe_key",
+        "name": "Stripe API Key",
+        # sk_live_ = production secret key, sk_test_ = test secret key
+        "regex": r'\bsk_(live|test)_[A-Za-z0-9]{24,}\b',
+        "confidence": 10,
+        "risk": "HIGH",
+    },
+    {
+        "id": "slack_token",
+        "name": "Slack Token",
+        # xoxb = bot token, xoxa = app token, xoxp = user token, xoxs = workspace token
+        "regex": r'\bxox[abps]-[0-9A-Za-z-]{10,}\b',
+        "confidence": 10,
+        "risk": "HIGH",
+    },
+    {
+        "id": "sendgrid_key",
+        "name": "SendGrid API Key",
+        # SendGrid keys: SG. + ~22 base64url chars + . + ~43 base64url chars
+        "regex": r'\bSG\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{40,}\b',
+        "confidence": 10,
         "risk": "HIGH",
     },
 ]
@@ -170,7 +236,7 @@ TARGET_EXTENSIONS = {
     ".htm", ".html",
 }
 
-# Common placeholder values — matches indicate likely false positive
+# Common placeholder values — post-match filter applied across all patterns in the engine
 PLACEHOLDER_VALUES = {
     "changeme", "password", "your_password", "yourpassword",
     "example", "test", "placeholder", "todo", "fixme",
@@ -182,6 +248,7 @@ PLACEHOLDER_VALUES = {
 }
 
 # Directory names that suggest docs/examples (reduces confidence by 3)
+# Matched as exact path segments only — not as substrings of longer names
 DOCS_DIRS = {
     "readme", "docs", "doc", "documentation",
     "examples", "example", "samples", "sample",

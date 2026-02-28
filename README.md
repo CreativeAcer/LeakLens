@@ -19,8 +19,9 @@ Scans Windows file shares (and local paths) for exposed credentials:
 - Scans text files for passwords, hashes, keys, tokens, and connection strings
 - Flags sensitive file types (`.pfx`, `.ppk`, `.kdbx`, `.pem`, ...) and risky filenames (`id_rsa`, `credentials`, `.env`, ...)
 - Scores every finding 1–10 so you spend time on what matters
+- Shows the **exact matched line and line number** for every content finding — no need to open the file
 - Streams results to a browser UI in real time
-- Saves a timestamped JSON report of every scan
+- Saves a timestamped JSON report of every scan, browseable in the **Reports tab**
 
 ---
 
@@ -66,7 +67,8 @@ Opens at **http://localhost:3000**.
 3. Click **Discover Shares** to enumerate all visible shares on a server
 4. Set the max file size to scan (default: 10 MB)
 5. Click **Start Scan**
-6. Findings stream in as they are found — click any row for detail and remediation advice
+6. Findings stream in as they are found — click any row to see the **matched line**, file metadata, and remediation advice
+7. Open the **Reports** tab at any time to reload a previous scan
 
 ---
 
@@ -80,8 +82,13 @@ Opens at **http://localhost:3000**.
 | Connection String | Embedded passwords in connection strings | 8/10 |
 | NTLM / LM Hash | `lm_hash:ntlm_hash` pairs | 7/10 |
 | Bcrypt Hash | `$2a$`, `$2b$`, `$2y$` | 7/10 |
-| Base64 Credential | Base64 values next to credential keywords | 7/10 |
+| Base64 Credential | Base64 values next to credential keywords | 5/10 |
 | AWS Access Key | `AKIA…` | 9/10 |
+| GitHub / GitLab PAT | `ghp_…`, `gho_…`, `glpat-…` | 10/10 |
+| Stripe API Key | `sk_live_…`, `sk_test_…` | 10/10 |
+| Slack Token | `xoxb-…`, `xoxp-…` | 10/10 |
+| SendGrid API Key | `SG.xxxx.xxxx` | 10/10 |
+| Azure Client Secret / Storage Key | Azure credential formats | 7–8/10 |
 | API Key / Bearer Token | Key assignments and `Bearer` tokens | 6/10 |
 | Private Key Header | `-----BEGIN … PRIVATE KEY-----` | 10/10 |
 | Net Use Credential | `net use /user:` commands | 7/10 |
@@ -137,6 +144,30 @@ checksums/**
 ```
 
 Pattern IDs are listed in `scanner/patterns.py`.
+
+---
+
+## Match evidence
+
+Every content finding includes the exact line that triggered the match. The detail drawer shows each detected pattern alongside its line number and the full matched line, so you can confirm the finding without opening the file:
+
+```
+Plaintext Password    Line 4
+  DB_PASSWORD=Tr0ub4dor&3
+
+AWS Access Key        Line 7
+  AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
+```
+
+Lines are truncated at 120 characters. Findings flagged only by file type or filename (e.g. `.pfx`, `id_rsa`) show a note in place of a snippet.
+
+---
+
+## Scan reports
+
+Every completed scan is saved as a timestamped JSON file in the `reports/` directory. The **Reports** tab in the UI lists all saved reports — click any entry to reload its findings into the main view, complete with filtering, search, and the detail drawer.
+
+Reports are also available directly via `GET /api/reports` and `GET /api/reports/<filename>`.
 
 ---
 
@@ -202,7 +233,7 @@ Expected findings across the 8 test files:
 | `deploy.ps1` | Plaintext Password, Connection String, PowerShell SecureString, Hardcoded PSCredential |
 | `app.config` | Plaintext Password, Generic API Key/Token |
 | `passwords.txt` | NTLM Hash |
-| `.env` | AWS Access Key, Plaintext Password, Base64 Credential |
+| `.env` | AWS Access Key, Plaintext Password, Base64 Credential, Stripe API Key |
 | `nightly-backup.bat` | Net Use Credential |
 | `db_maintenance.py` | Plaintext Password, Bearer Token |
 | `id_rsa` | Private Key Header |
@@ -233,6 +264,13 @@ LeakLens/
 ## How it works
 
 `leaklens.py` starts a Flask server that serves the frontend and exposes `POST /api/scan`. When a scan starts, a background thread runs `scanner/engine.py`, which walks the target path — local or SMB — matches patterns, applies confidence scoring and suppression rules, and yields findings as JSON. The browser reads these as **Server-Sent Events** streamed directly from the POST response body.
+
+---
+
+## Images
+
+![LeakLens Evidence](Images/Evidence.png)
+![LeakLens Reports](Images/Reports.png)
 
 ---
 

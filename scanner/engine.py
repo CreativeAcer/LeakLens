@@ -4,6 +4,7 @@ Replaces backend/scanner.ps1 — pure Python, handles local paths and UNC/SMB pa
 """
 
 import os
+import pathlib
 import re
 import fnmatch
 import datetime
@@ -56,11 +57,25 @@ def is_placeholder(value: str) -> bool:
     )
 
 
+def is_placeholder_match(match_str: str) -> bool:
+    """
+    Post-match filter applied to every pattern result.
+    Tries to extract the value portion (after = or :) and check it against
+    PLACEHOLDER_VALUES — catches noise that inline lookaheads don't cover.
+    """
+    m = re.search(r'[=:]\s*["\']?([^\s"\'<>{}]{4,})', match_str)
+    if not m:
+        return False
+    return is_placeholder(m.group(1))
+
+
 def is_docs_path(path: str) -> bool:
-    """Return True if any path component looks like a docs/examples directory."""
-    norm = path.lower().replace("\\", "/")
-    parts = norm.split("/")
-    return bool(set(parts) & DOCS_DIRS)
+    """
+    Return True if any exact path segment matches a docs/examples directory name.
+    Uses pathlib to avoid substring false positives (e.g. 'docs_archive' should not match).
+    """
+    parts = pathlib.Path(path.replace("\\", "/")).parts
+    return any(part.lower() in DOCS_DIRS for part in parts)
 
 
 # ─── Suppression (.leaklensignore) ────────────────────────────────────────────
@@ -119,10 +134,12 @@ def is_suppressed(path: str, pattern_ids: list, suppressions: dict, root: str) -
 def scan_content(content: str, path: str) -> list:
     """
     Match all content patterns against the file text.
-    Returns a list of matched pattern dicts (id, name, confidence, risk).
+    Returns a list of matched pattern dicts (id, name, confidence, risk,
+    matchLine, matchSnippet).
     Applies confidence adjustments for docs paths and placeholder values.
     """
     in_docs = is_docs_path(path)
+    lines = content.split('\n')
     matched = []
 
     for pattern in CONTENT_PATTERNS:
@@ -133,17 +150,29 @@ def scan_content(content: str, path: str) -> list:
         if not m:
             continue
 
+        # Global post-match placeholder filter — skips obvious dummy values
+        # that inline lookaheads in individual patterns may not cover
+        if is_placeholder_match(m.group(0)):
+            continue
+
         conf = pattern["confidence"]
 
         # Reduce confidence for docs/examples directories
         if in_docs:
             conf = max(1, conf - 3)
 
+        # Extract match location and the full line it appeared on
+        line_num = content[:m.start()].count('\n') + 1
+        raw_line = lines[line_num - 1].strip() if line_num <= len(lines) else m.group(0)
+        snippet = raw_line[:120] + ('…' if len(raw_line) > 120 else '')
+
         matched.append({
             "id": pattern["id"],
             "name": pattern["name"],
             "confidence": conf,
             "risk": get_risk_level(conf),
+            "matchLine": line_num,
+            "matchSnippet": snippet,
         })
 
     return matched
@@ -413,7 +442,7 @@ def scan_path(
 
             if binary_risk:
                 pass
-            elif ext in TARGET_EXTENSIONS:
+            elif ext in TARGET_EXTENSIONS or (risky_name and ext == ""):
                 if size_bytes <= max_size:
                     content = read_smb_file(smb_path, max_size)
                     if content:
