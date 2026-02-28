@@ -9,11 +9,12 @@ import re
 import fnmatch
 import datetime
 import json
+import time
 import threading
 from typing import Generator
 
 from scanner.patterns import (
-    CONTENT_PATTERNS,
+    COMPILED_PATTERNS,
     FLAGGED_EXTENSIONS,
     FLAGGED_NAMES,
     FLAGGED_EXACT_NAMES,
@@ -135,24 +136,29 @@ def scan_content(content: str, path: str) -> list:
     """
     Match all content patterns against the file text.
     Returns a list of matched pattern dicts (id, name, confidence, risk,
-    matchLine, matchSnippet).
+    matchLine, matchSnippet, matchCount, allMatchLines).
+    Uses pre-compiled patterns and re.finditer() to capture every occurrence.
     Applies confidence adjustments for docs paths and placeholder values.
     """
     in_docs = is_docs_path(path)
     lines = content.split('\n')
     matched = []
 
-    for pattern in CONTENT_PATTERNS:
+    for pattern in COMPILED_PATTERNS:
         try:
-            m = re.search(pattern["regex"], content)
+            hit_matches = []
+            for m in pattern["regex"].finditer(content):
+                # Global post-match placeholder filter
+                if is_placeholder_match(m.group(0)):
+                    continue
+                line_num = content[:m.start()].count('\n') + 1
+                raw_line = lines[line_num - 1].strip() if line_num <= len(lines) else m.group(0)
+                snippet = raw_line[:120] + ('…' if len(raw_line) > 120 else '')
+                hit_matches.append({"line": line_num, "snippet": snippet})
         except re.error:
             continue
-        if not m:
-            continue
 
-        # Global post-match placeholder filter — skips obvious dummy values
-        # that inline lookaheads in individual patterns may not cover
-        if is_placeholder_match(m.group(0)):
+        if not hit_matches:
             continue
 
         conf = pattern["confidence"]
@@ -161,18 +167,15 @@ def scan_content(content: str, path: str) -> list:
         if in_docs:
             conf = max(1, conf - 3)
 
-        # Extract match location and the full line it appeared on
-        line_num = content[:m.start()].count('\n') + 1
-        raw_line = lines[line_num - 1].strip() if line_num <= len(lines) else m.group(0)
-        snippet = raw_line[:120] + ('…' if len(raw_line) > 120 else '')
-
         matched.append({
             "id": pattern["id"],
             "name": pattern["name"],
             "confidence": conf,
             "risk": get_risk_level(conf),
-            "matchLine": line_num,
-            "matchSnippet": snippet,
+            "matchLine": hit_matches[0]["line"],
+            "matchSnippet": hit_matches[0]["snippet"],
+            "matchCount": len(hit_matches),
+            "allMatchLines": [h["line"] for h in hit_matches],
         })
 
     return matched
@@ -360,9 +363,13 @@ def _scan_smb(
         yield ("error", f"SMB authentication failed for {server}: {e}")
         return
 
-    for smb_path, fname, stat in walk_smb(unc_root, stop_event=stop_event):
+    for item in walk_smb(unc_root, stop_event=stop_event):
         if stop_event.is_set():
             return
+        if item[0] == "__error__":
+            yield ("log", f"[ACCESS DENIED] {item[1]}: {item[2]}")
+            continue
+        smb_path, fname, stat = item
         yield ("smb_file", smb_path, fname, stat, server, share)
 
 
@@ -405,6 +412,39 @@ def scan_path(
             return
         suppressions = load_suppressions(root)
 
+    # ── Report setup (early — partial file written as findings arrive) ─────────
+    if reports_dir is None:
+        reports_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "reports")
+
+    os.makedirs(reports_dir, exist_ok=True)
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    report_file = os.path.join(reports_dir, f"LeakLens_{timestamp}.json")
+    partial_file = os.path.join(reports_dir, f"LeakLens_{timestamp}.partial.json")
+
+    _FLUSH_EVERY_N = 500
+    _FLUSH_EVERY_SECS = 60.0
+    _last_flush_count = 0
+    _last_flush_time = time.time()
+
+    def _flush_partial():
+        nonlocal _last_flush_count, _last_flush_time
+        try:
+            tmp = partial_file + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as _f:
+                json.dump({
+                    "scanPath": root,
+                    "scanDate": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "scanned": file_count,
+                    "hits": hit_count,
+                    "partial": True,
+                    "findings": results,
+                }, _f, indent=2)
+            os.replace(tmp, partial_file)
+            _last_flush_count = hit_count
+            _last_flush_time = time.time()
+        except OSError:
+            pass
+
     file_count = 0
     hit_count = 0
     results = []
@@ -422,10 +462,14 @@ def scan_path(
                 yield {"type": "error", "message": event[1]}
                 return
 
+            if event[0] == "log":
+                yield {"type": "log", "message": event[1]}
+                continue
+
             _, smb_path, fname, stat, srv, shr = event
             file_count += 1
 
-            if file_count % 10 == 0 or file_count == 1:
+            if file_count % 100 == 0 or file_count == 1:
                 yield {"type": "progress", "scanned": file_count, "hits": hit_count, "current": smb_path}
 
             ext = os.path.splitext(fname)[1].lower()
@@ -497,6 +541,10 @@ def scan_path(
             results.append(finding)
             yield finding
 
+            if (hit_count - _last_flush_count >= _FLUSH_EVERY_N or
+                    time.time() - _last_flush_time >= _FLUSH_EVERY_SECS):
+                _flush_partial()
+
     # ── Local scan ────────────────────────────────────────────────────────────
     else:
         for event in _scan_local(root, max_size, stop_event):
@@ -506,7 +554,7 @@ def scan_path(
             _, fpath = event
             file_count += 1
 
-            if file_count % 10 == 0 or file_count == 1:
+            if file_count % 100 == 0 or file_count == 1:
                 yield {"type": "progress", "scanned": file_count, "hits": hit_count, "current": fpath}
 
             finding = _check_local_file(fpath, max_size)
@@ -521,17 +569,14 @@ def scan_path(
             results.append(finding)
             yield finding
 
+            if (hit_count - _last_flush_count >= _FLUSH_EVERY_N or
+                    time.time() - _last_flush_time >= _FLUSH_EVERY_SECS):
+                _flush_partial()
+
     # Final progress tick
     yield {"type": "progress", "scanned": file_count, "hits": hit_count, "current": ""}
 
-    # ── Save JSON report ──────────────────────────────────────────────────────
-    if reports_dir is None:
-        reports_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "reports")
-
-    os.makedirs(reports_dir, exist_ok=True)
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    report_file = os.path.join(reports_dir, f"LeakLens_{timestamp}.json")
-
+    # ── Save final JSON report ────────────────────────────────────────────────
     report = {
         "scanPath": root,
         "scanDate": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -543,6 +588,11 @@ def scan_path(
     try:
         with open(report_file, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2)
+        # Remove the partial file now that the final report is written
+        try:
+            os.remove(partial_file)
+        except OSError:
+            pass
         yield {"type": "log", "message": f"Report saved: {report_file}"}
     except OSError as e:
         yield {"type": "log", "message": f"Could not save report: {e}"}

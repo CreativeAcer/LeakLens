@@ -14,6 +14,8 @@ import os
 import queue
 import threading
 
+__version__ = "1.1.0"
+
 from flask import Flask, Response, jsonify, request, send_from_directory
 from flask import stream_with_context
 
@@ -125,7 +127,7 @@ def stop_scan():
 
 @app.route("/api/status", methods=["GET"])
 def status():
-    return jsonify({"scanning": _active["running"]})
+    return jsonify({"scanning": _active["running"], "version": __version__})
 
 
 # ─── POST /api/shares ─────────────────────────────────────────────────────────
@@ -159,7 +161,7 @@ def list_reports():
         return jsonify([])
     files = []
     for fname in os.listdir(REPORTS_DIR):
-        if not fname.endswith(".json"):
+        if not fname.endswith(".json") or fname.endswith(".partial.json"):
             continue
         fpath = os.path.join(REPORTS_DIR, fname)
         try:
