@@ -12,6 +12,7 @@ Opens at http://localhost:3000
 import json
 import os
 import queue
+import sqlite3
 import threading
 
 __version__ = "1.1.0"
@@ -53,6 +54,7 @@ def scan():
         scan_path = data.get("scanPath", "").strip()
         max_file_size_mb = int(data.get("maxFileSizeMB", 10))
         workers = max(1, min(32, int(data.get("workers", 8))))
+        resume = bool(data.get("resume", False))
         username = data.get("username") or None
         password = data.get("password") or None
         domain = data.get("domain") or None
@@ -81,6 +83,7 @@ def scan():
                     domain=domain,
                     reports_dir=REPORTS_DIR,
                     workers=workers,
+                    resume=resume,
                 ):
                     result_queue.put(event)
             except Exception as exc:
@@ -187,6 +190,102 @@ def get_report(name):
     if not os.path.isfile(fpath):
         return jsonify({"error": "Not found"}), 404
     return send_from_directory(REPORTS_DIR, name)
+
+
+# ─── GET /api/scans ───────────────────────────────────────────────────────────
+
+@app.route("/api/scans", methods=["GET"])
+def list_scans():
+    """Return metadata for all completed/in-progress SQLite scan databases."""
+    if not os.path.isdir(REPORTS_DIR):
+        return jsonify([])
+    scans = []
+    for fname in os.listdir(REPORTS_DIR):
+        if not fname.endswith(".db"):
+            continue
+        db_path = os.path.join(REPORTS_DIR, fname)
+        try:
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT * FROM scans LIMIT 1").fetchone()
+            if row:
+                scans.append(dict(row))
+            conn.close()
+        except Exception:
+            pass
+    scans.sort(key=lambda s: s.get("started_at", 0), reverse=True)
+    return jsonify(scans)
+
+
+# ─── GET /api/findings ────────────────────────────────────────────────────────
+
+@app.route("/api/findings", methods=["GET"])
+def get_findings():
+    """
+    Paginated findings query against a scan's SQLite database.
+
+    Query params:
+      scan_id   — required; timestamp-based scan ID (e.g. "20240101_120000")
+      page      — 0-based page number (default 0)
+      per_page  — rows per page, 1–500 (default 100)
+      risk      — HIGH | MEDIUM | LOW | ALL (default ALL)
+      search    — substring filter on file_name or full_path
+    """
+    scan_id  = request.args.get("scan_id", "").strip()
+    if not scan_id:
+        return jsonify({"error": "scan_id is required"}), 400
+
+    try:
+        page     = max(0, int(request.args.get("page", 0)))
+        per_page = max(1, min(500, int(request.args.get("per_page", 100))))
+    except ValueError:
+        return jsonify({"error": "page and per_page must be integers"}), 400
+
+    risk   = request.args.get("risk", "ALL").upper()
+    search = request.args.get("search", "").strip()
+
+    db_path = os.path.join(REPORTS_DIR, f"LeakLens_{scan_id}.db")
+    if not os.path.isfile(db_path):
+        return jsonify({"error": "Scan not found"}), 404
+
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+
+        conditions = ["scan_id = ?"]
+        params: list = [scan_id]
+
+        if risk != "ALL":
+            conditions.append("risk_level = ?")
+            params.append(risk)
+
+        if search:
+            conditions.append("(file_name LIKE ? OR full_path LIKE ?)")
+            params.extend([f"%{search}%", f"%{search}%"])
+
+        where = " AND ".join(conditions)
+
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM findings WHERE {where}", params
+        ).fetchone()[0]
+
+        rows = conn.execute(
+            f"SELECT data FROM findings WHERE {where} ORDER BY id LIMIT ? OFFSET ?",
+            params + [per_page, page * per_page],
+        ).fetchall()
+
+        findings = [json.loads(r["data"]) for r in rows]
+        conn.close()
+
+        return jsonify({
+            "scan_id":  scan_id,
+            "total":    total,
+            "page":     page,
+            "per_page": per_page,
+            "findings": findings,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
