@@ -4,6 +4,7 @@ Replaces backend/scanner.ps1 — pure Python, handles local paths and UNC/SMB pa
 """
 
 import os
+import pathlib
 import re
 import fnmatch
 import datetime
@@ -56,11 +57,25 @@ def is_placeholder(value: str) -> bool:
     )
 
 
+def is_placeholder_match(match_str: str) -> bool:
+    """
+    Post-match filter applied to every pattern result.
+    Tries to extract the value portion (after = or :) and check it against
+    PLACEHOLDER_VALUES — catches noise that inline lookaheads don't cover.
+    """
+    m = re.search(r'[=:]\s*["\']?([^\s"\'<>{}]{4,})', match_str)
+    if not m:
+        return False
+    return is_placeholder(m.group(1))
+
+
 def is_docs_path(path: str) -> bool:
-    """Return True if any path component looks like a docs/examples directory."""
-    norm = path.lower().replace("\\", "/")
-    parts = norm.split("/")
-    return bool(set(parts) & DOCS_DIRS)
+    """
+    Return True if any exact path segment matches a docs/examples directory name.
+    Uses pathlib to avoid substring false positives (e.g. 'docs_archive' should not match).
+    """
+    parts = pathlib.Path(path.replace("\\", "/")).parts
+    return any(part.lower() in DOCS_DIRS for part in parts)
 
 
 # ─── Suppression (.leaklensignore) ────────────────────────────────────────────
@@ -131,6 +146,11 @@ def scan_content(content: str, path: str) -> list:
         except re.error:
             continue
         if not m:
+            continue
+
+        # Global post-match placeholder filter — skips obvious dummy values
+        # that inline lookaheads in individual patterns may not cover
+        if is_placeholder_match(m.group(0)):
             continue
 
         conf = pattern["confidence"]
