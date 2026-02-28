@@ -9,8 +9,10 @@ import re
 import fnmatch
 import datetime
 import json
+import queue
 import time
 import threading
+from concurrent.futures import ThreadPoolExecutor, wait as fut_wait
 from typing import Generator
 
 from scanner.patterns import (
@@ -324,7 +326,7 @@ def _check_local_file(path: str, max_size: int) -> dict | None:
 
 
 def _scan_local(root: str, max_size: int, stop_event: threading.Event) -> Generator:
-    """Walk a local directory and yield findings."""
+    """Walk a local directory and yield file items."""
     for dirpath, dirnames, filenames in os.walk(root):
         if stop_event.is_set():
             return
@@ -347,7 +349,7 @@ def _scan_smb(
     password: str = None,
     domain: str = None,
 ) -> Generator:
-    """Walk an SMB share and yield findings."""
+    """Walk an SMB share and yield file items or error/log events."""
     if not SMB_AVAILABLE:
         yield ("error", "smbprotocol is not installed. Run: pip install smbprotocol")
         return
@@ -383,9 +385,14 @@ def scan_path(
     password: str = None,
     domain: str = None,
     reports_dir: str = None,
+    workers: int = 8,
 ) -> Generator:
     """
     Scan root (local path or UNC) and yield JSON-serialisable event dicts.
+
+    Architecture: one walk thread feeds a bounded file_queue; a ThreadPoolExecutor
+    with `workers` threads analyses files in parallel; results flow through an
+    events_queue back to this generator.
 
     Event types:
       {type: "log",      message: str}
@@ -394,17 +401,20 @@ def scan_path(
       {type: "summary",  scanned: int, hits: int, reportFile: str}
       {type: "error",    message: str}
     """
+    _FILE_TIMEOUT = 30.0   # seconds before a slow file is skipped
+    _FLUSH_EVERY_N = 500   # partial report flush: every N findings …
+    _FLUSH_EVERY_SECS = 60.0  # … or every 60 seconds, whichever comes first
+
     is_smb = is_unc_path(root)
 
-    yield {"type": "log", "message": f"Starting scan of: {root}"}
+    yield {"type": "log", "message": f"Starting scan of: {root} (workers={workers})"}
 
     if is_smb and not SMB_AVAILABLE:
         yield {"type": "error", "message": "smbprotocol is not installed. Run: pip install smbprotocol"}
         return
 
-    # Determine local root for suppression file lookup
+    # ── Suppression setup ──────────────────────────────────────────────────────
     if is_smb:
-        # Load suppressions from current working directory for UNC scans
         suppressions = load_suppressions(os.getcwd())
     else:
         if not os.path.exists(root):
@@ -412,7 +422,7 @@ def scan_path(
             return
         suppressions = load_suppressions(root)
 
-    # ── Report setup (early — partial file written as findings arrive) ─────────
+    # ── Report file paths (set up early so partial is written as findings arrive)
     if reports_dir is None:
         reports_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "reports")
 
@@ -421,174 +431,265 @@ def scan_path(
     report_file = os.path.join(reports_dir, f"LeakLens_{timestamp}.json")
     partial_file = os.path.join(reports_dir, f"LeakLens_{timestamp}.partial.json")
 
-    _FLUSH_EVERY_N = 500
-    _FLUSH_EVERY_SECS = 60.0
-    _last_flush_count = 0
-    _last_flush_time = time.time()
+    # SMB share root used for relative paths and suppression checks
+    if is_smb:
+        _srv, _shr, _ = parse_unc(root)
+        unc_share_root = f"\\\\{_srv}\\{_shr}"
+    else:
+        unc_share_root = ""
 
-    def _flush_partial():
-        nonlocal _last_flush_count, _last_flush_time
+    # ── Shared mutable state — ALL mutations guarded by _lock ──────────────────
+    _lock = threading.Lock()
+    _state = {
+        "file_count": 0,
+        "hit_count": 0,
+        "last_flush_count": 0,
+        "last_flush_time": time.time(),
+    }
+    results: list = []
+
+    def _flush_partial() -> None:
+        """Atomically write a partial report snapshot to disk (no lock held on I/O)."""
         try:
+            with _lock:
+                snapshot = list(results)
+                fc = _state["file_count"]
+                hc = _state["hit_count"]
             tmp = partial_file + ".tmp"
             with open(tmp, "w", encoding="utf-8") as _f:
                 json.dump({
                     "scanPath": root,
                     "scanDate": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "scanned": file_count,
-                    "hits": hit_count,
+                    "scanned": fc,
+                    "hits": hc,
                     "partial": True,
-                    "findings": results,
+                    "findings": snapshot,
                 }, _f, indent=2)
             os.replace(tmp, partial_file)
-            _last_flush_count = hit_count
-            _last_flush_time = time.time()
         except OSError:
             pass
 
-    file_count = 0
-    hit_count = 0
-    results = []
+    # ── Queues ────────────────────────────────────────────────────────────────
+    # file_q: walk → workers.  Bounded to keep memory under control.
+    _file_q: queue.Queue = queue.Queue(maxsize=max(workers * 8, 64))
+    # event_q: workers → main generator.
+    _event_q: queue.Queue = queue.Queue()
 
-    # ── SMB scan ──────────────────────────────────────────────────────────────
-    if is_smb:
-        server, share, _ = parse_unc(root)
-        unc_share_root = f"\\\\{server}\\{share}"
-
-        for event in _scan_smb(root, max_size, stop_event, username, password, domain):
-            if stop_event.is_set():
-                break
-
-            if event[0] == "error":
-                yield {"type": "error", "message": event[1]}
-                return
-
-            if event[0] == "log":
-                yield {"type": "log", "message": event[1]}
-                continue
-
-            _, smb_path, fname, stat, srv, shr = event
-            file_count += 1
-
-            if file_count % 100 == 0 or file_count == 1:
-                yield {"type": "progress", "scanned": file_count, "hits": hit_count, "current": smb_path}
-
-            ext = os.path.splitext(fname)[1].lower()
-            name_base = os.path.splitext(fname.lower())[0]
-
-            binary_risk = ext in FLAGGED_EXTENSIONS
-            risky_name = (
-                fname.lower() in FLAGGED_EXACT_NAMES
-                or any(n in name_base for n in FLAGGED_NAMES)
-            )
-
-            matched = []
-            size_bytes = stat.st_size if hasattr(stat, "st_size") else 0
-
-            if binary_risk:
-                pass
-            elif ext in TARGET_EXTENSIONS or (risky_name and ext == ""):
-                if size_bytes <= max_size:
-                    content = read_smb_file(smb_path, max_size)
-                    if content:
-                        matched = scan_content(content, smb_path)
-            elif not risky_name:
-                continue
-
-            if not binary_risk and not risky_name and not matched:
-                continue
-
-            # Build timestamps from SMB stat
-            try:
-                last_modified = datetime.datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M")
-                last_accessed = datetime.datetime.fromtimestamp(stat.st_atime).strftime("%Y-%m-%d %H:%M")
-            except Exception:
-                last_modified = ""
-                last_accessed = ""
-
-            # Relative path within the share
-            try:
-                rel_path = smb_path[len(unc_share_root):].lstrip("\\")
-            except Exception:
-                rel_path = smb_path
-
-            smb_meta = {
-                "smbShare": unc_share_root,
-                "smbServer": srv,
-                "smbRelativePath": rel_path,
-            }
-
-            finding = build_finding(
-                path=smb_path,
-                ext=ext,
-                size_bytes=size_bytes,
-                last_modified=last_modified,
-                last_accessed=last_accessed,
-                owner="",
-                matched_patterns=matched,
-                risky_name=risky_name,
-                binary_risk=binary_risk,
-                smb_meta=smb_meta,
-            )
-
-            if finding is None:
-                continue
-
-            pids = [f["id"] for f in finding.get("findingsDetail", [])]
-            if is_suppressed(smb_path, pids, suppressions, unc_share_root):
-                continue
-
-            hit_count += 1
-            results.append(finding)
-            yield finding
-
-            if (hit_count - _last_flush_count >= _FLUSH_EVERY_N or
-                    time.time() - _last_flush_time >= _FLUSH_EVERY_SECS):
-                _flush_partial()
-
-    # ── Local scan ────────────────────────────────────────────────────────────
-    else:
-        for event in _scan_local(root, max_size, stop_event):
-            if stop_event.is_set():
-                break
-
-            _, fpath = event
-            file_count += 1
-
-            if file_count % 100 == 0 or file_count == 1:
-                yield {"type": "progress", "scanned": file_count, "hits": hit_count, "current": fpath}
-
+    # ── Per-file analysis (called from worker threads, no lock held) ───────────
+    def _analyse_item(item: tuple) -> tuple:
+        """
+        Analyse a single file item (local or SMB).
+        Returns (finding_dict_or_None, file_path_str).
+        """
+        if item[0] == "file":
+            _, fpath = item
             finding = _check_local_file(fpath, max_size)
             if finding is None:
-                continue
-
+                return None, fpath
             pids = [f["id"] for f in finding.get("findingsDetail", [])]
             if is_suppressed(fpath, pids, suppressions, root):
+                return None, fpath
+            return finding, fpath
+
+        # "smb_file"
+        _, smb_path, fname, stat, _srv, _shr = item
+        ext = os.path.splitext(fname)[1].lower()
+        name_base = os.path.splitext(fname.lower())[0]
+        binary_risk = ext in FLAGGED_EXTENSIONS
+        risky_name = (
+            fname.lower() in FLAGGED_EXACT_NAMES
+            or any(n in name_base for n in FLAGGED_NAMES)
+        )
+        size_bytes = stat.st_size if hasattr(stat, "st_size") else 0
+        matched = []
+
+        if binary_risk:
+            pass
+        elif ext in TARGET_EXTENSIONS or (risky_name and ext == ""):
+            if size_bytes <= max_size:
+                content = read_smb_file(smb_path, max_size)
+                if content:
+                    matched = scan_content(content, smb_path)
+        elif not risky_name:
+            return None, smb_path
+
+        if not binary_risk and not risky_name and not matched:
+            return None, smb_path
+
+        try:
+            last_modified = datetime.datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M")
+            last_accessed = datetime.datetime.fromtimestamp(stat.st_atime).strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            last_modified = last_accessed = ""
+
+        try:
+            rel_path = smb_path[len(unc_share_root):].lstrip("\\")
+        except Exception:
+            rel_path = smb_path
+
+        smb_meta = {
+            "smbShare": unc_share_root,
+            "smbServer": _srv,
+            "smbRelativePath": rel_path,
+        }
+
+        finding = build_finding(
+            path=smb_path,
+            ext=ext,
+            size_bytes=size_bytes,
+            last_modified=last_modified,
+            last_accessed=last_accessed,
+            owner="",
+            matched_patterns=matched,
+            risky_name=risky_name,
+            binary_risk=binary_risk,
+            smb_meta=smb_meta,
+        )
+
+        if finding is None:
+            return None, smb_path
+
+        pids = [f["id"] for f in finding.get("findingsDetail", [])]
+        if is_suppressed(smb_path, pids, suppressions, unc_share_root):
+            return None, smb_path
+
+        return finding, smb_path
+
+    # ── Walk thread: feeds _file_q ─────────────────────────────────────────────
+    def _walk() -> None:
+        try:
+            if is_smb:
+                for ev in _scan_smb(root, max_size, stop_event, username, password, domain):
+                    if stop_event.is_set():
+                        break
+                    if ev[0] == "error":
+                        _event_q.put({"type": "error", "message": ev[1]})
+                        break
+                    if ev[0] == "log":
+                        _event_q.put({"type": "log", "message": ev[1]})
+                        continue
+                    _file_q.put(ev)   # blocks if queue full (natural backpressure)
+            else:
+                for ev in _scan_local(root, max_size, stop_event):
+                    if stop_event.is_set():
+                        break
+                    _file_q.put(ev)
+        finally:
+            # Poison pill: one per worker so each exits its get() loop
+            for _ in range(workers):
+                _file_q.put(None)
+
+    # ── Worker: consumes _file_q, puts events into _event_q ───────────────────
+    def _worker() -> None:
+        while not stop_event.is_set():
+            try:
+                item = _file_q.get(timeout=1.0)
+            except queue.Empty:
                 continue
 
-            hit_count += 1
-            results.append(finding)
-            yield finding
+            if item is None:
+                break   # poison pill received
 
-            if (hit_count - _last_flush_count >= _FLUSH_EVERY_N or
-                    time.time() - _last_flush_time >= _FLUSH_EVERY_SECS):
+            fpath = item[1] if len(item) > 1 else "?"
+            finding = None
+
+            # Submit analysis with a per-file timeout so one slow file can't
+            # stall a worker indefinitely (SMB connection_timeout=30 handles
+            # most hangs, but this is an additional safety net).
+            with ThreadPoolExecutor(max_workers=1) as _inner:
+                fut = _inner.submit(_analyse_item, item)
+                done_futs, _ = fut_wait([fut], timeout=_FILE_TIMEOUT)
+
+            if not done_futs:
+                _event_q.put({
+                    "type": "log",
+                    "message": f"[TIMEOUT] Skipped slow file (>{_FILE_TIMEOUT:.0f}s): {fpath}",
+                })
+            else:
+                try:
+                    finding, fpath = fut.result()
+                except Exception as e:
+                    _event_q.put({"type": "log", "message": f"[ERROR] {fpath}: {e}"})
+
+            # Always increment file_count exactly once per file
+            need_flush = False
+            with _lock:
+                _state["file_count"] += 1
+                fc = _state["file_count"]
+                if finding is not None:
+                    _state["hit_count"] += 1
+                    hc = _state["hit_count"]
+                    results.append(finding)
+                    # Optimistically claim the flush slot to prevent double-flush
+                    if (hc - _state["last_flush_count"] >= _FLUSH_EVERY_N or
+                            time.time() - _state["last_flush_time"] >= _FLUSH_EVERY_SECS):
+                        need_flush = True
+                        _state["last_flush_count"] = hc
+                        _state["last_flush_time"] = time.time()
+                else:
+                    hc = _state["hit_count"]
+
+            if finding is not None:
+                _event_q.put(finding)
+            if fc % 100 == 0 or fc == 1:
+                _event_q.put({
+                    "type": "progress",
+                    "scanned": fc,
+                    "hits": hc,
+                    "current": fpath,
+                })
+            if need_flush:
                 _flush_partial()
 
+        _event_q.put(("__done__",))   # signal this worker has finished
+
+    # ── Orchestrate: start walk + worker pool, consume events ─────────────────
+    walk_thread = threading.Thread(target=_walk, daemon=True)
+    walk_thread.start()
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        for _ in range(workers):
+            executor.submit(_worker)
+
+        # Drain events_queue until all workers signal done
+        done_workers = 0
+        fatal_error = False
+        while done_workers < workers:
+            item = _event_q.get()
+            if isinstance(item, tuple) and item == ("__done__",):
+                done_workers += 1
+                continue
+            if not isinstance(item, dict):
+                continue
+            yield item
+            if item.get("type") == "error":
+                fatal_error = True
+                stop_event.set()
+
+    walk_thread.join(timeout=5)
+
+    if fatal_error:
+        return
+
+    with _lock:
+        fc = _state["file_count"]
+        hc = _state["hit_count"]
+
     # Final progress tick
-    yield {"type": "progress", "scanned": file_count, "hits": hit_count, "current": ""}
+    yield {"type": "progress", "scanned": fc, "hits": hc, "current": ""}
 
     # ── Save final JSON report ────────────────────────────────────────────────
     report = {
         "scanPath": root,
         "scanDate": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "scanned": file_count,
-        "hits": hit_count,
+        "scanned": fc,
+        "hits": hc,
         "findings": results,
     }
 
     try:
         with open(report_file, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2)
-        # Remove the partial file now that the final report is written
         try:
             os.remove(partial_file)
         except OSError:
@@ -598,4 +699,4 @@ def scan_path(
         yield {"type": "log", "message": f"Could not save report: {e}"}
         report_file = ""
 
-    yield {"type": "summary", "scanned": file_count, "hits": hit_count, "reportFile": report_file}
+    yield {"type": "summary", "scanned": fc, "hits": hc, "reportFile": report_file}

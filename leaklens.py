@@ -52,6 +52,7 @@ def scan():
         data = request.get_json(silent=True) or {}
         scan_path = data.get("scanPath", "").strip()
         max_file_size_mb = int(data.get("maxFileSizeMB", 10))
+        workers = max(1, min(32, int(data.get("workers", 8))))
         username = data.get("username") or None
         password = data.get("password") or None
         domain = data.get("domain") or None
@@ -79,6 +80,7 @@ def scan():
                     password=password,
                     domain=domain,
                     reports_dir=REPORTS_DIR,
+                    workers=workers,
                 ):
                     result_queue.put(event)
             except Exception as exc:

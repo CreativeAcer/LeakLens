@@ -821,6 +821,9 @@
         <label>Max File Size (MB)</label>
         <input type="number" id="maxFileSizeMB" value="10" min="1" max="500" />
 
+        <label>Worker Threads</label>
+        <input type="number" id="workerCount" value="8" min="1" max="32" title="Parallel file analysis threads (1–32). Default 8 for SMB, increase to 16 for large local scans." />
+
         <button class="btn btn-primary" id="startBtn" onclick="startScan()">
           <span>▶</span> Start Scan
         </button>
@@ -1008,6 +1011,7 @@
   async function startScan() {
     const scanPath      = document.getElementById('scanPath').value.trim();
     const maxFileSizeMB = parseInt(document.getElementById('maxFileSizeMB').value) || 10;
+    const workers       = Math.max(1, Math.min(32, parseInt(document.getElementById('workerCount').value) || 8));
     const username      = document.getElementById('smbUsername')?.value.trim() || '';
     const password      = document.getElementById('smbPassword')?.value || '';
     const domain        = document.getElementById('smbDomain')?.value.trim() || '';
@@ -1032,7 +1036,7 @@
       response = await fetch(`${API}/scan`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scanPath, maxFileSizeMB, username, password, domain }),
+        body: JSON.stringify({ scanPath, maxFileSizeMB, workers, username, password, domain }),
       });
     } catch (e) {
       alert('Cannot reach backend. Is it running?\n' + e.message);
