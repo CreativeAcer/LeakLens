@@ -41,13 +41,14 @@ def register_session(server: str, username: str = None, password: str = None, do
     if not SMB_AVAILABLE:
         raise RuntimeError("smbprotocol is not installed. Run: pip install smbprotocol")
 
-    kwargs = {}
+    kwargs = {"connection_timeout": 30}
     if username:
         kwargs["username"] = username
     if password is not None:
         kwargs["password"] = password
     if domain:
         kwargs["auth_protocol"] = "ntlm"
+        kwargs["domain"] = domain
 
     smbclient.register_session(server, **kwargs)
 
@@ -65,7 +66,8 @@ def list_shares(host: str, username: str = None, password: str = None, domain: s
 def walk_smb(unc_root: str, stop_event=None):
     """
     Recursively walk an SMB share.
-    Yields (smb_path, entry_name, smb_stat) for each file.
+    Yields (smb_path, entry_name, smb_stat) for each file,
+    or ("__error__", path, message) when a path is inaccessible.
     smb_stat has .st_size, .st_mtime, .st_atime, .st_ctime attributes.
     """
     if not SMB_AVAILABLE:
@@ -85,10 +87,10 @@ def walk_smb(unc_root: str, stop_event=None):
                     try:
                         stat = entry.stat()
                         yield full, entry.name, stat
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+                    except Exception as e:
+                        yield ("__error__", full, str(e))
+        except Exception as e:
+            yield ("__error__", path, str(e))
 
     yield from _recurse(normalize_unc(unc_root))
 

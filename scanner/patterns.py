@@ -1,3 +1,5 @@
+import re
+
 # ─── Content patterns with confidence scoring ─────────────────────────────────
 # confidence: 1-10  (1 = very likely false positive, 10 = near-certain credential)
 # risk: derived from confidence (>=8 HIGH, >=5 MEDIUM, else LOW)
@@ -259,3 +261,10 @@ DOCS_DIRS = {
 # Pattern IDs that are hash-only (low signal on their own — likely checksums, not credentials)
 # NTLM hashes are always credential hashes so they are intentionally excluded here
 HASH_PATTERN_IDS = {"md5_hash", "sha1_hash", "sha256_hash", "sha512_hash"}
+
+# Pre-compiled patterns — use these in the engine to avoid re-compiling on every file.
+# Inline flags in each regex string ((?i), (?ix), etc.) are preserved by re.compile().
+COMPILED_PATTERNS = [
+    {**p, "regex": re.compile(p["regex"])}
+    for p in CONTENT_PATTERNS
+]
