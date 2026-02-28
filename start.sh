@@ -7,56 +7,38 @@ echo "  ║        LeakLens — Credential Exposure Scanner        ║"
 echo "  ╚══════════════════════════════════════════════════════╝"
 echo ""
 
-# ─── Check Node.js ────────────────────────────────────────────────────────────
-if ! command -v node &>/dev/null; then
-  echo "  [ERROR] Node.js is not installed. Install from https://nodejs.org"
+# ─── Check Python ─────────────────────────────────────────────────────────────
+if ! command -v python3 &>/dev/null && ! command -v python &>/dev/null; then
+  echo "  [ERROR] Python 3 is not installed."
+  echo "  Install from https://www.python.org or via your package manager."
   exit 1
 fi
-echo "  [OK] Node.js $(node -v) found"
 
-# ─── Check PowerShell Core ────────────────────────────────────────────────────
-if ! command -v pwsh &>/dev/null; then
-  echo "  [ERROR] PowerShell Core (pwsh) is not installed."
-  echo "  Install from https://github.com/PowerShell/PowerShell"
-  exit 1
-fi
-echo "  [OK] $(pwsh --version) found"
+PYTHON=$(command -v python3 || command -v python)
+echo "  [OK] $($PYTHON --version) found"
 
-# ─── Install dependencies if needed ──────────────────────────────────────────
-if [ ! -d "backend/node_modules" ]; then
-  echo ""
-  echo "  [*] Installing backend dependencies..."
-  (cd backend && npm install --silent)
-  echo "  [OK] Dependencies installed"
-else
-  echo "  [OK] Dependencies already installed"
-fi
+# ─── Install dependencies ─────────────────────────────────────────────────────
+echo ""
+echo "  [*] Installing dependencies (flask, smbprotocol)..."
+$PYTHON -m pip install -r requirements.txt -q
+echo "  [OK] Dependencies ready"
 
 # ─── Create reports directory ─────────────────────────────────────────────────
 mkdir -p reports
 
-# ─── Start backend ────────────────────────────────────────────────────────────
+# ─── Start server ─────────────────────────────────────────────────────────────
 echo ""
-echo "  [*] Starting LeakLens backend on http://localhost:3000"
-echo ""
-
-(cd backend && node server.js) &
-BACKEND_PID=$!
-
-sleep 1
-
-# ─── Open browser ─────────────────────────────────────────────────────────────
-if command -v xdg-open &>/dev/null; then
-  xdg-open "http://localhost:3000" &>/dev/null &
-elif command -v open &>/dev/null; then
-  open "http://localhost:3000"
-fi
-
-echo "  ┌─────────────────────────────────────────────────────┐"
-echo "  │  LeakLens is running at http://localhost:3000       │"
-echo "  │  Press Ctrl+C to stop.                              │"
-echo "  └─────────────────────────────────────────────────────┘"
+echo "  [*] Starting LeakLens at http://localhost:3000"
+echo "      Press Ctrl+C to stop."
 echo ""
 
-# Wait for backend
-wait $BACKEND_PID
+# Open browser after server starts
+(sleep 1.5 && (
+  if command -v xdg-open &>/dev/null; then
+    xdg-open "http://localhost:3000" &>/dev/null
+  elif command -v open &>/dev/null; then
+    open "http://localhost:3000"
+  fi
+)) &
+
+$PYTHON leaklens.py

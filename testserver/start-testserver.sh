@@ -28,7 +28,7 @@ echo "  [OK] Using $RUNTIME"
 # --- Build -------------------------------------------------------------------
 echo ""
 echo "  [*] Building test server image..."
-$RUNTIME build -t leaklens-testserver "$SCRIPT_DIR/testserver"
+$RUNTIME build -t leaklens-testserver "$SCRIPT_DIR"
 echo "  [OK] Image built"
 
 # --- Remove existing ---------------------------------------------------------

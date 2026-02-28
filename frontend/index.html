@@ -109,17 +109,13 @@
       50%       { box-shadow: 0 0 20px rgba(0,212,255,0.5), inset 0 0 12px rgba(0,212,255,0.1); }
     }
 
-    .logo-text {
-      font-family: var(--sans);
-    }
-
+    .logo-text { font-family: var(--sans); }
     .logo-text h1 {
       font-size: 18px;
       font-weight: 800;
       color: var(--text-bright);
       letter-spacing: 0.05em;
     }
-
     .logo-text span {
       font-size: 11px;
       color: var(--text-dim);
@@ -144,13 +140,11 @@
       background: var(--text-dim);
       transition: background 0.3s, box-shadow 0.3s;
     }
-
     .status-dot.scanning {
       background: var(--accent);
       box-shadow: 0 0 8px var(--accent);
       animation: blink 1s ease-in-out infinite;
     }
-
     .status-dot.done {
       background: var(--low);
       box-shadow: 0 0 8px var(--low);
@@ -169,7 +163,7 @@
       padding: 24px 20px;
       display: flex;
       flex-direction: column;
-      gap: 20px;
+      gap: 16px;
       position: sticky;
       top: 65px;
       height: calc(100vh - 65px);
@@ -194,9 +188,7 @@
       font-weight: 500;
     }
 
-    .panel-body {
-      padding: 14px;
-    }
+    .panel-body { padding: 14px; }
 
     label {
       display: block;
@@ -207,7 +199,9 @@
       margin-bottom: 6px;
     }
 
-    input[type="text"], input[type="number"] {
+    input[type="text"],
+    input[type="number"],
+    input[type="password"] {
       width: 100%;
       background: var(--bg);
       border: 1px solid var(--border2);
@@ -244,20 +238,12 @@
       transition: all 0.2s;
     }
 
-    .btn-primary {
-      background: var(--accent);
-      color: #000;
-    }
-
+    .btn-primary { background: var(--accent); color: #000; }
     .btn-primary:hover:not(:disabled) {
       background: #33ddff;
       box-shadow: 0 0 16px rgba(0,212,255,0.4);
     }
-
-    .btn-primary:disabled {
-      opacity: 0.4;
-      cursor: not-allowed;
-    }
+    .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
 
     .btn-danger {
       background: transparent;
@@ -265,13 +251,44 @@
       border: 1px solid var(--high);
       margin-top: 8px;
     }
-
     .btn-danger:hover:not(:disabled) {
       background: var(--high-bg);
       box-shadow: 0 0 12px rgba(255,77,106,0.2);
     }
-
     .btn-danger:disabled { opacity: 0.3; cursor: not-allowed; }
+
+    .btn-ghost {
+      background: transparent;
+      color: var(--text-dim);
+      border: 1px solid var(--border2);
+      margin-top: 6px;
+      font-size: 11px;
+      padding: 7px 12px;
+    }
+    .btn-ghost:hover:not(:disabled) {
+      color: var(--accent);
+      border-color: var(--accent2);
+    }
+    .btn-ghost:disabled { opacity: 0.3; cursor: not-allowed; }
+
+    /* SMB shares dropdown */
+    .shares-list {
+      margin-top: 8px;
+      background: var(--bg);
+      border: 1px solid var(--border2);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .share-item {
+      padding: 7px 10px;
+      font-size: 11px;
+      cursor: pointer;
+      border-bottom: 1px solid var(--border);
+      transition: background 0.15s;
+      color: var(--text);
+    }
+    .share-item:last-child { border-bottom: none; }
+    .share-item:hover { background: rgba(0,212,255,0.06); color: var(--accent); }
 
     /* ── Stats ── */
     .stats-grid {
@@ -296,9 +313,7 @@
       color: var(--text-bright);
       transition: color 0.3s;
     }
-
     .stat-card .value.has-hits { color: var(--high); }
-
     .stat-card .label {
       font-size: 10px;
       color: var(--text-dim);
@@ -317,17 +332,10 @@
       margin-bottom: 6px;
       font-size: 11px;
     }
-
-    .risk-label {
-      width: 48px;
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: 0.1em;
-    }
-
-    .risk-label.HIGH  { color: var(--high); }
+    .risk-label { width: 48px; font-size: 10px; font-weight: 700; letter-spacing: 0.1em; }
+    .risk-label.HIGH   { color: var(--high); }
     .risk-label.MEDIUM { color: var(--med); }
-    .risk-label.LOW   { color: var(--low); }
+    .risk-label.LOW    { color: var(--low); }
 
     .risk-track {
       flex: 1;
@@ -336,24 +344,18 @@
       border-radius: 2px;
       overflow: hidden;
     }
-
     .risk-fill {
       height: 100%;
       border-radius: 2px;
       transition: width 0.5s ease;
     }
-
     .risk-fill.HIGH   { background: var(--high); box-shadow: 0 0 6px var(--high); }
     .risk-fill.MEDIUM { background: var(--med);  box-shadow: 0 0 6px var(--med); }
     .risk-fill.LOW    { background: var(--low);  box-shadow: 0 0 6px var(--low); }
-
     .risk-count { min-width: 24px; text-align: right; color: var(--text-dim); font-size: 11px; }
 
     /* Progress */
-    .progress-wrap {
-      margin-top: 4px;
-    }
-
+    .progress-wrap { margin-top: 4px; }
     .progress-track {
       width: 100%;
       height: 3px;
@@ -361,7 +363,6 @@
       border-radius: 2px;
       overflow: hidden;
     }
-
     .progress-fill {
       height: 100%;
       background: var(--accent);
@@ -370,17 +371,14 @@
       transition: width 0.3s ease;
       box-shadow: 0 0 6px var(--accent);
     }
-
     .progress-fill.indeterminate {
       width: 60% !important;
       animation: progress-slide 1.5s ease-in-out infinite;
     }
-
     @keyframes progress-slide {
       0%   { transform: translateX(-100%); }
       100% { transform: translateX(200%); }
     }
-
     .progress-text {
       font-size: 10px;
       color: var(--text-dim);
@@ -406,7 +404,6 @@
       border-bottom: 1px solid var(--border);
       background: var(--bg2);
     }
-
     .tab {
       padding: 8px 16px;
       font-size: 11px;
@@ -418,14 +415,11 @@
       transition: color 0.2s, border-color 0.2s;
       user-select: none;
     }
-
     .tab:hover { color: var(--text); }
-
     .tab.active {
       color: var(--accent);
       border-bottom-color: var(--accent);
     }
-
     .tab-badge {
       background: var(--high);
       color: #fff;
@@ -466,11 +460,10 @@
       cursor: pointer;
       transition: all 0.2s;
     }
-
-    .filter-btn.active-HIGH  { border-color: var(--high); color: var(--high); background: var(--high-bg); }
-    .filter-btn.active-MEDIUM { border-color: var(--med); color: var(--med); background: var(--med-bg); }
-    .filter-btn.active-LOW   { border-color: var(--low); color: var(--low); background: var(--low-bg); }
-    .filter-btn.active-ALL   { border-color: var(--accent); color: var(--accent); }
+    .filter-btn.active-HIGH   { border-color: var(--high); color: var(--high); background: var(--high-bg); }
+    .filter-btn.active-MEDIUM { border-color: var(--med);  color: var(--med);  background: var(--med-bg); }
+    .filter-btn.active-LOW    { border-color: var(--low);  color: var(--low);  background: var(--low-bg); }
+    .filter-btn.active-ALL    { border-color: var(--accent); color: var(--accent); }
 
     .search-input {
       margin-left: auto;
@@ -485,7 +478,6 @@
       padding: 60px 20px;
       color: var(--text-dim);
     }
-
     .empty-state .icon { font-size: 48px; margin-bottom: 12px; opacity: 0.4; }
     .empty-state p { font-size: 13px; }
 
@@ -495,7 +487,6 @@
       border-collapse: collapse;
       font-size: 12px;
     }
-
     .findings-table thead th {
       text-align: left;
       padding: 8px 10px;
@@ -509,27 +500,22 @@
       background: var(--bg);
       z-index: 10;
     }
-
     .findings-table tbody tr {
       border-bottom: 1px solid var(--border);
       cursor: pointer;
       transition: background 0.15s;
       animation: row-in 0.3s ease both;
     }
-
     @keyframes row-in {
       from { opacity: 0; transform: translateX(-8px); }
       to   { opacity: 1; transform: translateX(0); }
     }
-
     .findings-table tbody tr:hover { background: rgba(0,212,255,0.04); }
-
     .findings-table td {
       padding: 9px 10px;
       vertical-align: middle;
       max-width: 0;
     }
-
     .findings-table td.filename {
       max-width: 180px;
       overflow: hidden;
@@ -538,7 +524,6 @@
       color: var(--text-bright);
       font-weight: 500;
     }
-
     .findings-table td.path {
       max-width: 240px;
       overflow: hidden;
@@ -547,10 +532,7 @@
       color: var(--text-dim);
       font-size: 11px;
     }
-
-    .findings-table td.findings-cell {
-      max-width: 280px;
-    }
+    .findings-table td.findings-cell { max-width: 280px; }
 
     .risk-badge {
       display: inline-block;
@@ -560,10 +542,23 @@
       font-weight: 700;
       letter-spacing: 0.1em;
     }
-
     .risk-badge.HIGH   { background: var(--high-bg); color: var(--high); border: 1px solid rgba(255,77,106,0.3); }
     .risk-badge.MEDIUM { background: var(--med-bg);  color: var(--med);  border: 1px solid rgba(255,184,48,0.3); }
     .risk-badge.LOW    { background: var(--low-bg);  color: var(--low);  border: 1px solid rgba(77,255,184,0.3); }
+
+    .confidence-dots {
+      display: inline-flex;
+      gap: 2px;
+      margin-left: 5px;
+      vertical-align: middle;
+    }
+    .confidence-dot {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--border2);
+    }
+    .confidence-dot.filled { background: currentColor; }
 
     .finding-tag {
       display: inline-block;
@@ -577,6 +572,24 @@
       white-space: nowrap;
     }
 
+    .smb-badge {
+      display: inline-block;
+      background: rgba(255,184,48,0.08);
+      border: 1px solid rgba(255,184,48,0.3);
+      border-radius: 3px;
+      padding: 1px 6px;
+      font-size: 10px;
+      color: var(--med);
+      margin-left: 4px;
+    }
+
+    .hash-note {
+      font-size: 10px;
+      color: var(--text-dim);
+      font-style: italic;
+      margin-top: 3px;
+    }
+
     /* ── Log panel ── */
     .log-wrap {
       flex: 1;
@@ -585,7 +598,6 @@
       font-family: var(--mono);
       font-size: 12px;
     }
-
     .log-entry {
       padding: 3px 0;
       border-bottom: 1px solid rgba(255,255,255,0.03);
@@ -593,7 +605,6 @@
       gap: 10px;
       animation: row-in 0.2s ease both;
     }
-
     .log-time { color: var(--text-dim); flex-shrink: 0; font-size: 11px; }
     .log-msg  { color: var(--text); word-break: break-all; }
     .log-msg.err { color: var(--high); }
@@ -608,12 +619,10 @@
       pointer-events: none;
       transition: opacity 0.25s;
     }
-
     .drawer-overlay.open {
       opacity: 1;
       pointer-events: all;
     }
-
     .drawer {
       position: fixed;
       right: -500px;
@@ -627,9 +636,7 @@
       transition: right 0.3s cubic-bezier(0.22, 1, 0.36, 1);
       padding: 24px;
     }
-
     .drawer.open { right: 0; }
-
     .drawer-close {
       position: absolute;
       top: 16px;
@@ -655,11 +662,7 @@
       padding-right: 48px;
       word-break: break-all;
     }
-
-    .drawer-section {
-      margin-top: 20px;
-    }
-
+    .drawer-section { margin-top: 20px; }
     .drawer-section h3 {
       font-size: 10px;
       text-transform: uppercase;
@@ -667,26 +670,48 @@
       color: var(--accent);
       margin-bottom: 10px;
     }
-
     .detail-row {
       display: flex;
       gap: 8px;
       margin-bottom: 7px;
       font-size: 12px;
     }
-
     .detail-key {
-      min-width: 110px;
+      min-width: 120px;
       color: var(--text-dim);
       font-size: 11px;
     }
-
-    .detail-val {
-      color: var(--text-bright);
-      word-break: break-all;
-    }
-
+    .detail-val { color: var(--text-bright); word-break: break-all; }
     .drawer .finding-tag { font-size: 11px; padding: 3px 8px; }
+
+    /* Confidence bar in drawer */
+    .conf-bar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 4px;
+    }
+    .conf-track {
+      flex: 1;
+      height: 4px;
+      background: var(--border);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .conf-fill {
+      height: 100%;
+      border-radius: 2px;
+      transition: width 0.4s ease;
+    }
+    .conf-fill.HIGH   { background: var(--high); box-shadow: 0 0 6px var(--high); }
+    .conf-fill.MEDIUM { background: var(--med);  box-shadow: 0 0 6px var(--med); }
+    .conf-fill.LOW    { background: var(--low);  box-shadow: 0 0 6px var(--low); }
+    .conf-label {
+      font-size: 10px;
+      min-width: 32px;
+      text-align: right;
+      color: var(--text-dim);
+    }
 
     /* ── Scrollbar ── */
     ::-webkit-scrollbar { width: 6px; }
@@ -724,7 +749,7 @@
       <div class="panel-header">⬡ Scan Configuration</div>
       <div class="panel-body">
         <label>File Share Path</label>
-        <input type="text" id="scanPath" placeholder="\\server\share or C:\path" />
+        <input type="text" id="scanPath" placeholder="\\server\share or C:\path" oninput="onPathInput()" />
 
         <label>Max File Size (MB)</label>
         <input type="number" id="maxFileSizeMB" value="10" min="1" max="500" />
@@ -735,6 +760,23 @@
         <button class="btn btn-danger" id="stopBtn" onclick="stopScan()" disabled>
           <span>■</span> Stop Scan
         </button>
+      </div>
+    </div>
+
+    <!-- SMB Credentials (revealed on UNC path) -->
+    <div class="panel" id="smbPanel" style="display:none">
+      <div class="panel-header">⬡ SMB Credentials</div>
+      <div class="panel-body">
+        <label>Username</label>
+        <input type="text" id="smbUsername" placeholder="DOMAIN\user  (blank = guest)" />
+        <label>Password</label>
+        <input type="password" id="smbPassword" placeholder="(leave blank for guest)" />
+        <label>Domain</label>
+        <input type="text" id="smbDomain" placeholder="optional" />
+        <button class="btn btn-ghost" id="discoverBtn" onclick="discoverShares()">
+          ⬡ Discover Shares
+        </button>
+        <div id="sharesList"></div>
       </div>
     </div>
 
@@ -752,7 +794,6 @@
             <div class="label">Findings</div>
           </div>
         </div>
-
         <div class="progress-wrap" style="margin-top:12px;">
           <div class="progress-track">
             <div class="progress-fill" id="progressFill"></div>
@@ -816,7 +857,7 @@
         <table class="findings-table" id="findingsTable" style="display:none">
           <thead>
             <tr>
-              <th style="width:70px">Risk</th>
+              <th style="width:90px">Risk</th>
               <th>Filename</th>
               <th>Path</th>
               <th>Size</th>
@@ -845,18 +886,26 @@
 </div>
 
 <script>
-  const API = 'http://localhost:3000/api';
+  const API = '/api';
 
   let findings      = [];
   let activeFilter  = 'ALL';
   let scanning      = false;
-  let eventSource   = null;
+  let activeReader  = null;   // ReadableStreamDefaultReader
   let riskCounts    = { HIGH: 0, MEDIUM: 0, LOW: 0 };
+
+  // ── Path input — show/hide SMB panel ──────────────────────────────────────
+  function onPathInput() {
+    const v = document.getElementById('scanPath').value;
+    const isUnc = v.startsWith('\\\\') || v.startsWith('//');
+    document.getElementById('smbPanel').style.display = isUnc ? 'block' : 'none';
+  }
 
   // ── Tab switching ──────────────────────────────────────────────────────────
   function switchTab(name) {
-    document.querySelectorAll('.tab').forEach((t, i) => {
-      t.classList.toggle('active', t.textContent.trim().startsWith(name === 'findings' ? 'F' : 'L'));
+    document.querySelectorAll('.tab').forEach(t => {
+      t.classList.toggle('active',
+        t.textContent.trim().startsWith(name === 'findings' ? 'F' : 'L'));
     });
     document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
     document.getElementById('tab-' + name).classList.add('active');
@@ -866,7 +915,8 @@
   function setFilter(f) {
     activeFilter = f;
     ['ALL','HIGH','MEDIUM','LOW'].forEach(x => {
-      const btn = document.getElementById('f' + (x === 'ALL' ? 'All' : x === 'MEDIUM' ? 'Med' : x.charAt(0) + x.slice(1).toLowerCase()));
+      const id = 'f' + (x === 'ALL' ? 'All' : x === 'MEDIUM' ? 'Med' : x.charAt(0) + x.slice(1).toLowerCase());
+      const btn = document.getElementById(id);
       if (btn) btn.className = 'filter-btn' + (x === f ? ' active-' + f : '');
     });
     renderTable();
@@ -874,117 +924,187 @@
 
   // ── Start scan ─────────────────────────────────────────────────────────────
   async function startScan() {
-    const scanPath = document.getElementById('scanPath').value.trim();
+    const scanPath      = document.getElementById('scanPath').value.trim();
     const maxFileSizeMB = parseInt(document.getElementById('maxFileSizeMB').value) || 10;
+    const username      = document.getElementById('smbUsername')?.value.trim() || '';
+    const password      = document.getElementById('smbPassword')?.value || '';
+    const domain        = document.getElementById('smbDomain')?.value.trim() || '';
 
-    if (!scanPath) {
-      alert('Please enter a file share path.');
-      return;
-    }
+    if (!scanPath) { alert('Please enter a file share path.'); return; }
 
-    // Reset state
+    // Reset
     findings   = [];
     riskCounts = { HIGH: 0, MEDIUM: 0, LOW: 0 };
-    document.getElementById('tableBody').innerHTML = '';
-    document.getElementById('logWrap').innerHTML   = '';
+    document.getElementById('tableBody').innerHTML   = '';
+    document.getElementById('logWrap').innerHTML     = '';
     document.getElementById('statScanned').textContent  = '0';
     document.getElementById('statFindings').textContent = '0';
+    document.getElementById('findingsBadge').style.display = 'none';
+    document.getElementById('emptyState').style.display = 'block';
+    document.getElementById('findingsTable').style.display = 'none';
     updateRiskBars();
     setStatus('scanning');
 
+    let response;
     try {
-      const res = await fetch(`${API}/scan`, {
+      response = await fetch(`${API}/scan`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scanPath, maxFileSizeMB })
+        body: JSON.stringify({ scanPath, maxFileSizeMB, username, password, domain }),
       });
-      const data = await res.json();
-      if (!res.ok) { alert(data.error); setStatus('idle'); return; }
-    } catch(e) {
+    } catch (e) {
       alert('Cannot reach backend. Is it running?\n' + e.message);
       setStatus('idle');
       return;
     }
 
-    // Connect SSE
-    if (eventSource) eventSource.close();
-    eventSource = new EventSource(`${API}/stream`);
-
-    eventSource.addEventListener('progress', e => {
-      const d = JSON.parse(e.data);
-      document.getElementById('statScanned').textContent = d.scanned;
-      if (d.current) {
-        document.getElementById('progressText').textContent = d.current;
-      }
-      const pf = document.getElementById('progressFill');
-      pf.classList.add('indeterminate');
-    });
-
-    eventSource.addEventListener('finding', e => {
-      const d = JSON.parse(e.data);
-      findings.push(d);
-      riskCounts[d.riskLevel] = (riskCounts[d.riskLevel] || 0) + 1;
-
-      const count = findings.length;
-      document.getElementById('statFindings').textContent = count;
-      document.getElementById('statFindings').classList.toggle('has-hits', count > 0);
-
-      const badge = document.getElementById('findingsBadge');
-      badge.style.display = 'inline';
-      badge.textContent = count;
-
-      updateRiskBars();
-      appendRow(d);
-    });
-
-    eventSource.addEventListener('log', e => {
-      const d = JSON.parse(e.data);
-      appendLog(d.message, false);
-    });
-
-    eventSource.addEventListener('error', e => {
+    if (!response.ok) {
       try {
-        const d = JSON.parse(e.data);
-        appendLog(d.message, true);
-      } catch (_) {}
-    });
-
-    eventSource.addEventListener('summary', e => {
-      const d = JSON.parse(e.data);
-      appendLog(`✔ Scan complete — ${d.scanned} files scanned, ${d.hits} findings. Report: ${d.reportFile}`, false);
-    });
-
-    eventSource.addEventListener('done', e => {
-      setStatus('done');
-      eventSource.close();
-      eventSource = null;
-      document.getElementById('progressFill').classList.remove('indeterminate');
-      document.getElementById('progressFill').style.width = '100%';
-      document.getElementById('progressText').textContent = 'Scan complete';
-    });
-
-    eventSource.onerror = () => {
-      if (!scanning) return;
-      appendLog('SSE connection lost.', true);
+        const err = await response.json();
+        alert(err.error || 'Scan failed.');
+      } catch (_) { alert('Scan failed.'); }
       setStatus('idle');
-    };
+      return;
+    }
+
+    // Read the SSE stream from the POST response body
+    activeReader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    try {
+      while (true) {
+        const { done, value } = await activeReader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith('data: ')) continue;
+          try {
+            const data = JSON.parse(trimmed.slice(6));
+            handleStreamEvent(data);
+          } catch (_) {}
+        }
+      }
+    } catch (e) {
+      if (e.name !== 'AbortError') {
+        appendLog('Stream error: ' + e.message, true);
+      }
+    }
+
+    setStatus('done');
+    activeReader = null;
+    document.getElementById('progressFill').classList.remove('indeterminate');
+    document.getElementById('progressFill').style.width = '100%';
+    document.getElementById('progressText').textContent = 'Scan complete';
+  }
+
+  // ── Handle individual SSE events ───────────────────────────────────────────
+  function handleStreamEvent(d) {
+    switch (d.type) {
+      case 'progress':
+        document.getElementById('statScanned').textContent = d.scanned;
+        if (d.current) document.getElementById('progressText').textContent = d.current;
+        document.getElementById('progressFill').classList.add('indeterminate');
+        break;
+
+      case 'finding':
+        findings.push(d);
+        riskCounts[d.riskLevel] = (riskCounts[d.riskLevel] || 0) + 1;
+        document.getElementById('statFindings').textContent = findings.length;
+        document.getElementById('statFindings').classList.toggle('has-hits', findings.length > 0);
+        const badge = document.getElementById('findingsBadge');
+        badge.style.display = 'inline';
+        badge.textContent = findings.length;
+        updateRiskBars();
+        appendRow(d);
+        break;
+
+      case 'log':
+        appendLog(d.message, false);
+        break;
+
+      case 'error':
+        appendLog(d.message, true);
+        break;
+
+      case 'summary':
+        appendLog(`✔ Scan complete — ${d.scanned} files scanned, ${d.hits} findings. Report: ${d.reportFile}`, false);
+        break;
+
+      case 'done':
+        setStatus('done');
+        break;
+    }
   }
 
   // ── Stop scan ──────────────────────────────────────────────────────────────
   async function stopScan() {
+    if (activeReader) {
+      try { activeReader.cancel(); } catch (_) {}
+      activeReader = null;
+    }
     await fetch(`${API}/scan/stop`, { method: 'POST' }).catch(() => {});
     setStatus('idle');
-    if (eventSource) { eventSource.close(); eventSource = null; }
+  }
+
+  // ── SMB: Discover shares ───────────────────────────────────────────────────
+  async function discoverShares() {
+    const path = document.getElementById('scanPath').value.trim();
+    const host = path.replace(/^\\\\|^\/\//, '').split(/[\\\/]/)[0];
+    if (!host) { alert('Enter a server hostname or IP first.'); return; }
+
+    const btn = document.getElementById('discoverBtn');
+    btn.disabled = true;
+    btn.textContent = '… Discovering';
+
+    try {
+      const res = await fetch(`${API}/shares`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          host,
+          username: document.getElementById('smbUsername').value.trim(),
+          password: document.getElementById('smbPassword').value,
+          domain:   document.getElementById('smbDomain').value.trim(),
+        }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) { alert(data.error || 'Could not enumerate shares.'); return; }
+
+      const container = document.getElementById('sharesList');
+      if (!data.shares || data.shares.length === 0) {
+        container.innerHTML = '<p style="font-size:11px;color:var(--text-dim);margin-top:8px;">No shares found.</p>';
+        return;
+      }
+      container.innerHTML = '<div class="shares-list">' +
+        data.shares.map(s =>
+          `<div class="share-item" onclick="selectShare('${escHtml(host)}','${escHtml(s)}')">${escHtml(s)}</div>`
+        ).join('') + '</div>';
+    } catch (e) {
+      alert('Share discovery failed: ' + e.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '⬡ Discover Shares';
+    }
+  }
+
+  function selectShare(host, share) {
+    document.getElementById('scanPath').value = `\\\\${host}\\${share}`;
   }
 
   // ── Status ─────────────────────────────────────────────────────────────────
   function setStatus(state) {
     scanning = state === 'scanning';
-    const dot  = document.getElementById('statusDot');
-    const text = document.getElementById('statusText');
+    const dot      = document.getElementById('statusDot');
+    const text     = document.getElementById('statusText');
     const startBtn = document.getElementById('startBtn');
     const stopBtn  = document.getElementById('stopBtn');
-
     dot.className  = 'status-dot' + (state === 'scanning' ? ' scanning' : state === 'done' ? ' done' : '');
     text.textContent = state === 'scanning' ? 'Scanning…' : state === 'done' ? 'Complete' : 'Idle';
     startBtn.disabled = scanning;
@@ -995,7 +1115,7 @@
   function updateRiskBars() {
     const total = findings.length || 1;
     ['HIGH','MEDIUM','LOW'].forEach(r => {
-      const c = riskCounts[r] || 0;
+      const c   = riskCounts[r] || 0;
       const key = r === 'MEDIUM' ? 'Med' : r.charAt(0) + r.slice(1).toLowerCase();
       document.getElementById('riskFill' + key).style.width = (c / total * 100) + '%';
       document.getElementById('riskCount' + key).textContent = c;
@@ -1022,11 +1142,9 @@
     if (filtered.length === 0) {
       empty.style.display = 'block';
       table.style.display = 'none';
-      if (findings.length === 0) {
-        empty.innerHTML = '<div class="icon">🔍</div><p>Configure a path and start a scan to see findings here.</p>';
-      } else {
-        empty.innerHTML = '<div class="icon">✓</div><p>No findings match current filters.</p>';
-      }
+      empty.innerHTML = findings.length === 0
+        ? '<div class="icon">🔍</div><p>Configure a path and start a scan to see findings here.</p>'
+        : '<div class="icon">✓</div><p>No findings match current filters.</p>';
     } else {
       empty.style.display = 'none';
       table.style.display = 'table';
@@ -1035,35 +1153,45 @@
   }
 
   function appendRow(f, tbody) {
-    // If no tbody passed, live-append to existing
     const t = tbody || document.getElementById('tableBody');
     if (!tbody) {
-      // Check filter matches
       const search = document.getElementById('searchInput').value.toLowerCase();
-      const matchFilter = activeFilter === 'ALL' || f.riskLevel === activeFilter;
-      const matchSearch = !search ||
-        f.fileName.toLowerCase().includes(search) ||
-        f.fullPath.toLowerCase().includes(search);
-      if (!matchFilter || !matchSearch) return;
-
+      if (activeFilter !== 'ALL' && f.riskLevel !== activeFilter) return;
+      if (search && !f.fileName.toLowerCase().includes(search) && !f.fullPath.toLowerCase().includes(search)) return;
       document.getElementById('emptyState').style.display = 'none';
       document.getElementById('findingsTable').style.display = 'table';
     }
 
-    const tags = (f.findingsList || f.findings.split(' | '))
-      .map(x => `<span class="finding-tag">${x}</span>`).join('');
+    const list = f.findingsList || (f.findings ? f.findings.split(' | ') : []);
+    const tags = list.map(x => `<span class="finding-tag">${escHtml(x)}</span>`).join('');
+    const conf = f.confidence || 0;
+    const confDots = Array.from({length: 10}, (_, i) =>
+      `<span class="confidence-dot${i < conf ? ' filled' : ''}" style="color:${riskColor(f.riskLevel)}"></span>`
+    ).join('');
+    const isSmb = !!f.smbShare;
 
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td><span class="risk-badge ${f.riskLevel}">${f.riskLevel}</span></td>
-      <td class="filename" title="${f.fileName}">${f.fileName}</td>
-      <td class="path" title="${f.fullPath}">${f.fullPath}</td>
+      <td>
+        <span class="risk-badge ${f.riskLevel}">${f.riskLevel}</span>
+        <span class="confidence-dots">${confDots}</span>
+        ${isSmb ? '<span class="smb-badge">SMB</span>' : ''}
+      </td>
+      <td class="filename" title="${escHtml(f.fileName)}">${escHtml(f.fileName)}</td>
+      <td class="path" title="${escHtml(f.fullPath)}">${escHtml(f.fullPath)}</td>
       <td>${f.sizeKB} KB</td>
-      <td class="findings-cell">${tags}</td>
-      <td>${f.lastModified}</td>
+      <td class="findings-cell">
+        ${tags}
+        ${f.hashOnly ? `<div class="hash-note">${escHtml(f.note || '')}</div>` : ''}
+      </td>
+      <td>${escHtml(f.lastModified)}</td>
     `;
     tr.onclick = () => openDrawer(f);
     t.appendChild(tr);
+  }
+
+  function riskColor(risk) {
+    return risk === 'HIGH' ? 'var(--high)' : risk === 'MEDIUM' ? 'var(--med)' : 'var(--low)';
   }
 
   // ── Log ────────────────────────────────────────────────────────────────────
@@ -1079,22 +1207,47 @@
 
   // ── Detail drawer ──────────────────────────────────────────────────────────
   function openDrawer(f) {
-    const tags = (f.findingsList || f.findings.split(' | '))
-      .map(x => `<span class="finding-tag">${x}</span>`).join(' ');
+    const list = f.findingsList || (f.findings ? f.findings.split(' | ') : []);
+    const tags = list.map(x => `<span class="finding-tag">${escHtml(x)}</span>`).join(' ');
+    const conf = f.confidence || 0;
+    const isSmb = !!f.smbShare;
+
+    const smbSection = isSmb ? `
+      <div class="drawer-section">
+        <h3>SMB Details</h3>
+        <div class="detail-row"><span class="detail-key">Server</span><span class="detail-val">${escHtml(f.smbServer || '')}</span></div>
+        <div class="detail-row"><span class="detail-key">Share</span><span class="detail-val">${escHtml(f.smbShare || '')}</span></div>
+        <div class="detail-row"><span class="detail-key">Relative Path</span><span class="detail-val">${escHtml(f.smbRelativePath || '')}</span></div>
+        <div class="detail-row"><span class="detail-key">Last Accessed</span><span class="detail-val">${escHtml(f.lastAccessed || '—')}</span></div>
+      </div>` : '';
 
     document.getElementById('drawerContent').innerHTML = `
       <h2>${escHtml(f.fileName)}</h2>
       <span class="risk-badge ${f.riskLevel}" style="margin-top:6px;display:inline-block">${f.riskLevel} RISK</span>
+      ${isSmb ? '<span class="smb-badge" style="margin-left:6px">SMB</span>' : ''}
+
+      <div class="drawer-section">
+        <h3>Confidence</h3>
+        <div class="conf-bar">
+          <div class="conf-track">
+            <div class="conf-fill ${f.riskLevel}" style="width:${conf * 10}%"></div>
+          </div>
+          <span class="conf-label">${conf}/10</span>
+        </div>
+        ${f.hashOnly ? `<p class="hash-note" style="margin-top:6px">${escHtml(f.note || '')}</p>` : ''}
+      </div>
 
       <div class="drawer-section">
         <h3>File Details</h3>
         <div class="detail-row"><span class="detail-key">Full Path</span><span class="detail-val">${escHtml(f.fullPath)}</span></div>
         <div class="detail-row"><span class="detail-key">Extension</span><span class="detail-val">${escHtml(f.extension)}</span></div>
         <div class="detail-row"><span class="detail-key">Size</span><span class="detail-val">${f.sizeKB} KB</span></div>
-        <div class="detail-row"><span class="detail-key">Last Modified</span><span class="detail-val">${f.lastModified}</span></div>
+        <div class="detail-row"><span class="detail-key">Last Modified</span><span class="detail-val">${escHtml(f.lastModified || '—')}</span></div>
         <div class="detail-row"><span class="detail-key">Owner</span><span class="detail-val">${escHtml(f.owner || '—')}</span></div>
         <div class="detail-row"><span class="detail-key">Risky Filename</span><span class="detail-val">${f.riskyFilename ? '⚠ Yes' : 'No'}</span></div>
       </div>
+
+      ${smbSection}
 
       <div class="drawer-section">
         <h3>Detected Patterns</h3>
@@ -1118,18 +1271,36 @@
 
   function getRecommendation(f) {
     const p = f.findings || '';
-    if (p.includes('Private Key'))         return 'Private key material detected. Rotate immediately, revoke the exposed key, and move key files to a secure vault (e.g., Azure Key Vault). Never store private keys on file shares.';
-    if (p.includes('NTLM'))                return 'NTLM/LM hash found. Treat as compromised credentials — rotate the associated account password immediately and investigate how the hash was exposed.';
-    if (p.includes('Plaintext Password'))  return 'Plaintext password found. Remove credentials from the file, rotate the password, and use a secrets manager or encrypted config instead.';
-    if (p.includes('Sensitive file type')) return 'Sensitive key/certificate file detected on a shared location. Move to a secure, access-restricted secrets store and remove from the file share.';
-    if (p.includes('Connection String'))   return 'Database connection string with embedded credentials found. Migrate to managed identity authentication or reference credentials from a secrets manager.';
-    if (p.includes('AWS Access Key'))      return 'AWS access key detected. Revoke immediately via AWS IAM, check CloudTrail for unauthorized use, and use IAM roles instead.';
-    return 'Review this file and remove any embedded credentials or sensitive data. Use environment variables, Azure Key Vault, or other secrets management solutions.';
+    const isSmb = !!f.smbShare;
+    const share = isSmb ? ` on share <strong>${escHtml(f.smbShare)}</strong>` : '';
+    const smbSuffix = isSmb
+      ? ` Review NTFS permissions on the file and consider restricting access via AD/GPO.`
+      : '';
+
+    if (p.includes('Private Key'))
+      return `Private key material detected${share}. Rotate immediately, revoke the exposed key, and move to a secure vault (e.g., Azure Key Vault).${smbSuffix}`;
+    if (p.includes('NTLM'))
+      return `NTLM/LM hash found${share}. Treat as compromised credentials — rotate the account password immediately and audit how the hash was exposed.${smbSuffix}`;
+    if (p.includes('Plaintext Password'))
+      return `Plaintext password found${share}. Remove credentials from the file, rotate the password, and use a secrets manager or encrypted config.${smbSuffix}`;
+    if (p.includes('Sensitive file type'))
+      return `Sensitive key/certificate file found${share}. Move to a secure, access-restricted secrets store and remove from the share.${smbSuffix}`;
+    if (p.includes('Connection String'))
+      return `Database connection string with embedded credentials found${share}. Migrate to managed identity or reference credentials from a secrets manager.${smbSuffix}`;
+    if (p.includes('AWS Access Key'))
+      return `AWS access key detected${share}. Revoke immediately via AWS IAM, check CloudTrail for unauthorized use, and use IAM roles instead.${smbSuffix}`;
+    if (f.hashOnly)
+      return `Hash strings detected — likely integrity checksums. Verify these are not credential hashes before dismissing.${smbSuffix}`;
+    return `Review this file and remove any embedded credentials. Use environment variables, Azure Key Vault, or other secrets management solutions.${smbSuffix}`;
   }
 
   function escHtml(s) {
-    if (!s) return '';
-    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    if (s == null) return '';
+    return String(s)
+      .replace(/&/g,'&amp;')
+      .replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;');
   }
 </script>
 </body>
