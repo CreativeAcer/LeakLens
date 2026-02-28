@@ -824,6 +824,11 @@
         <label>Worker Threads</label>
         <input type="number" id="workerCount" value="8" min="1" max="32" title="Parallel file analysis threads (1–32). Default 8 for SMB, increase to 16 for large local scans." />
 
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+          <input type="checkbox" id="resumeScan" style="width:auto;margin:0;" title="Resume from the last checkpoint if the previous scan was interrupted." />
+          Resume interrupted scan
+        </label>
+
         <button class="btn btn-primary" id="startBtn" onclick="startScan()">
           <span>▶</span> Start Scan
         </button>
@@ -936,7 +941,9 @@
               <th>Modified</th>
             </tr>
           </thead>
+          <tbody id="vsPadTop"><tr><td colspan="6" id="vsTopSpacer" style="height:0;padding:0;border:none;"></td></tr></tbody>
           <tbody id="tableBody"></tbody>
+          <tbody id="vsPadBot"><tr><td colspan="6" id="vsBotSpacer" style="height:0;padding:0;border:none;"></td></tr></tbody>
         </table>
       </div>
     </div>
@@ -972,11 +979,15 @@
 <script>
   const API = '/api';
 
-  let findings      = [];
-  let activeFilter  = 'ALL';
-  let scanning      = false;
-  let activeReader  = null;   // ReadableStreamDefaultReader
-  let riskCounts    = { HIGH: 0, MEDIUM: 0, LOW: 0 };
+  let findings         = [];
+  let filteredFindings = [];   // filtered + sorted subset rendered by virtual scroll
+  let activeFilter     = 'ALL';
+  let scanning         = false;
+  let activeReader     = null;   // ReadableStreamDefaultReader
+  let riskCounts       = { HIGH: 0, MEDIUM: 0, LOW: 0 };
+  let _vsRafPending    = false;  // requestAnimationFrame throttle flag
+  const ROW_H          = 44;    // px — must match tbody tr rendered height
+  const VS_OVERSCAN    = 5;     // extra rows rendered above/below viewport
 
   // ── Path input — show/hide SMB panel ──────────────────────────────────────
   function onPathInput() {
@@ -1012,6 +1023,7 @@
     const scanPath      = document.getElementById('scanPath').value.trim();
     const maxFileSizeMB = parseInt(document.getElementById('maxFileSizeMB').value) || 10;
     const workers       = Math.max(1, Math.min(32, parseInt(document.getElementById('workerCount').value) || 8));
+    const resume        = document.getElementById('resumeScan')?.checked || false;
     const username      = document.getElementById('smbUsername')?.value.trim() || '';
     const password      = document.getElementById('smbPassword')?.value || '';
     const domain        = document.getElementById('smbDomain')?.value.trim() || '';
@@ -1019,10 +1031,13 @@
     if (!scanPath) { alert('Please enter a file share path.'); return; }
 
     // Reset
-    findings   = [];
-    riskCounts = { HIGH: 0, MEDIUM: 0, LOW: 0 };
-    document.getElementById('tableBody').innerHTML   = '';
-    document.getElementById('logWrap').innerHTML     = '';
+    findings         = [];
+    filteredFindings = [];
+    riskCounts       = { HIGH: 0, MEDIUM: 0, LOW: 0 };
+    document.getElementById('tableBody').innerHTML    = '';
+    document.getElementById('vsTopSpacer').style.height = '0';
+    document.getElementById('vsBotSpacer').style.height = '0';
+    document.getElementById('logWrap').innerHTML      = '';
     document.getElementById('statScanned').textContent  = '0';
     document.getElementById('statFindings').textContent = '0';
     document.getElementById('findingsBadge').style.display = 'none';
@@ -1036,7 +1051,7 @@
       response = await fetch(`${API}/scan`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scanPath, maxFileSizeMB, workers, username, password, domain }),
+        body: JSON.stringify({ scanPath, maxFileSizeMB, workers, resume, username, password, domain }),
       });
     } catch (e) {
       alert('Cannot reach backend. Is it running?\n' + e.message);
@@ -1094,7 +1109,10 @@
     switch (d.type) {
       case 'progress':
         document.getElementById('statScanned').textContent = d.scanned;
-        if (d.current) document.getElementById('progressText').textContent = d.current;
+        if (d.current) {
+          const rateStr = d.rate ? ` — ${d.rate} files/s` : '';
+          document.getElementById('progressText').textContent = d.current + rateStr;
+        }
         document.getElementById('progressFill').classList.add('indeterminate');
         break;
 
@@ -1107,7 +1125,7 @@
         badge.style.display = 'inline';
         badge.textContent = findings.length;
         updateRiskBars();
-        appendRow(d);
+        onNewFinding(d);
         break;
 
       case 'log':
@@ -1208,46 +1226,86 @@
     });
   }
 
-  // ── Table rendering ────────────────────────────────────────────────────────
-  function renderTable() {
+  // ── Table rendering (virtual scroll) ──────────────────────────────────────
+  function updateFilteredFindings() {
     const search = document.getElementById('searchInput').value.toLowerCase();
-    const tbody  = document.getElementById('tableBody');
-    tbody.innerHTML = '';
-
-    const filtered = findings.filter(f => {
+    filteredFindings = findings.filter(f => {
       const matchFilter = activeFilter === 'ALL' || f.riskLevel === activeFilter;
       const matchSearch = !search ||
         f.fileName.toLowerCase().includes(search) ||
         f.fullPath.toLowerCase().includes(search);
       return matchFilter && matchSearch;
     });
+  }
 
+  function renderTable() {
+    updateFilteredFindings();
     const empty = document.getElementById('emptyState');
     const table = document.getElementById('findingsTable');
 
-    if (filtered.length === 0) {
+    if (filteredFindings.length === 0) {
       empty.style.display = 'block';
       table.style.display = 'none';
+      document.getElementById('tableBody').innerHTML = '';
+      document.getElementById('vsTopSpacer').style.height = '0';
+      document.getElementById('vsBotSpacer').style.height = '0';
       empty.innerHTML = findings.length === 0
         ? '<div class="icon">🔍</div><p>Configure a path and start a scan to see findings here.</p>'
         : '<div class="icon">✓</div><p>No findings match current filters.</p>';
-    } else {
-      empty.style.display = 'none';
-      table.style.display = 'table';
-      filtered.forEach(f => appendRow(f, tbody));
+      return;
+    }
+
+    empty.style.display = 'none';
+    table.style.display = 'table';
+    renderVisibleRows();
+  }
+
+  function renderVisibleRows() {
+    const wrap    = document.querySelector('.findings-wrap');
+    const scrollTop = wrap ? wrap.scrollTop : 0;
+    const viewH   = wrap ? wrap.clientHeight : 600;
+    const total   = filteredFindings.length;
+
+    const start = Math.max(0, Math.floor(scrollTop / ROW_H) - VS_OVERSCAN);
+    const end   = Math.min(total, Math.ceil((scrollTop + viewH) / ROW_H) + VS_OVERSCAN);
+
+    document.getElementById('vsTopSpacer').style.height = (start * ROW_H) + 'px';
+    document.getElementById('vsBotSpacer').style.height = ((total - end) * ROW_H) + 'px';
+
+    const tbody = document.getElementById('tableBody');
+    tbody.innerHTML = '';
+    for (let i = start; i < end; i++) {
+      appendRow(filteredFindings[i], tbody);
+    }
+  }
+
+  function scheduleVsRender() {
+    if (!_vsRafPending) {
+      _vsRafPending = true;
+      requestAnimationFrame(() => {
+        _vsRafPending = false;
+        renderVisibleRows();
+      });
+    }
+  }
+
+  // Called for each new finding arriving from the SSE stream
+  function onNewFinding(f) {
+    const search = document.getElementById('searchInput').value.toLowerCase();
+    const matchFilter = activeFilter === 'ALL' || f.riskLevel === activeFilter;
+    const matchSearch = !search ||
+      f.fileName.toLowerCase().includes(search) ||
+      f.fullPath.toLowerCase().includes(search);
+
+    if (matchFilter && matchSearch) {
+      filteredFindings.push(f);
+      document.getElementById('emptyState').style.display = 'none';
+      document.getElementById('findingsTable').style.display = 'table';
+      scheduleVsRender();
     }
   }
 
   function appendRow(f, tbody) {
-    const t = tbody || document.getElementById('tableBody');
-    if (!tbody) {
-      const search = document.getElementById('searchInput').value.toLowerCase();
-      if (activeFilter !== 'ALL' && f.riskLevel !== activeFilter) return;
-      if (search && !f.fileName.toLowerCase().includes(search) && !f.fullPath.toLowerCase().includes(search)) return;
-      document.getElementById('emptyState').style.display = 'none';
-      document.getElementById('findingsTable').style.display = 'table';
-    }
-
     const list = f.findingsList || (f.findings ? f.findings.split(' | ') : []);
     const tags = list.map(x => `<span class="finding-tag">${escHtml(x)}</span>`).join('');
     const conf = f.confidence || 0;
@@ -1273,7 +1331,7 @@
       <td>${escHtml(f.lastModified)}</td>
     `;
     tr.onclick = () => openDrawer(f);
-    t.appendChild(tr);
+    tbody.appendChild(tr);
   }
 
   function riskColor(risk) {
@@ -1422,8 +1480,9 @@
       if (!res.ok) { alert('Could not load report.'); return; }
       const report = await res.json();
 
-      findings   = report.findings || [];
-      riskCounts = { HIGH: 0, MEDIUM: 0, LOW: 0 };
+      findings         = report.findings || [];
+      filteredFindings = [];
+      riskCounts       = { HIGH: 0, MEDIUM: 0, LOW: 0 };
       findings.forEach(f => { riskCounts[f.riskLevel] = (riskCounts[f.riskLevel] || 0) + 1; });
 
       document.getElementById('statScanned').textContent  = report.scanned || 0;
@@ -1449,6 +1508,12 @@
       .replace(/>/g,'&gt;')
       .replace(/"/g,'&quot;');
   }
+
+  // ── Virtual scroll — attach scroll listener once DOM is ready ──────────────
+  document.addEventListener('DOMContentLoaded', () => {
+    const wrap = document.querySelector('.findings-wrap');
+    if (wrap) wrap.addEventListener('scroll', scheduleVsRender, { passive: true });
+  });
 </script>
 </body>
 </html>

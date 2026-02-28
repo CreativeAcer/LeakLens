@@ -3,6 +3,7 @@ LeakLens scanner engine.
 Replaces backend/scanner.ps1 — pure Python, handles local paths and UNC/SMB paths.
 """
 
+import hashlib
 import os
 import pathlib
 import re
@@ -10,6 +11,7 @@ import fnmatch
 import datetime
 import json
 import queue
+import sqlite3
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, wait as fut_wait
@@ -150,7 +152,6 @@ def scan_content(content: str, path: str) -> list:
         try:
             hit_matches = []
             for m in pattern["regex"].finditer(content):
-                # Global post-match placeholder filter
                 if is_placeholder_match(m.group(0)):
                     continue
                 line_num = content[:m.start()].count('\n') + 1
@@ -164,8 +165,6 @@ def scan_content(content: str, path: str) -> list:
             continue
 
         conf = pattern["confidence"]
-
-        # Reduce confidence for docs/examples directories
         if in_docs:
             conf = max(1, conf - 3)
 
@@ -221,7 +220,6 @@ def build_finding(
     max_conf = max(f["confidence"] for f in all_findings)
     overall_risk = get_risk_level(max_conf)
 
-    # Flag hash-only findings with a note
     non_hash = [f for f in all_findings
                 if f["id"] not in HASH_PATTERN_IDS and f["id"] != "risky_filename"]
     hash_only = (
@@ -284,9 +282,8 @@ def _check_local_file(path: str, max_size: int) -> dict | None:
     matched = []
 
     if binary_risk:
-        pass  # handled in build_finding
+        pass
     elif ext in TARGET_EXTENSIONS or (risky_name and ext == ""):
-        # Also content-scan extensionless files with risky names (.env, id_rsa, etc.)
         if stat.st_size <= max_size:
             try:
                 with open(path, "r", encoding="utf-8", errors="ignore") as f:
@@ -300,11 +297,9 @@ def _check_local_file(path: str, max_size: int) -> dict | None:
     if not binary_risk and not risky_name and not matched:
         return None
 
-    # Timestamps
     last_modified = datetime.datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M")
     last_accessed = datetime.datetime.fromtimestamp(stat.st_atime).strftime("%Y-%m-%d %H:%M")
 
-    # Owner (Unix only; graceful on Windows)
     owner = ""
     try:
         import pwd
@@ -330,13 +325,11 @@ def _scan_local(root: str, max_size: int, stop_event: threading.Event) -> Genera
     for dirpath, dirnames, filenames in os.walk(root):
         if stop_event.is_set():
             return
-        # Skip hidden dirs (e.g. .git)
         dirnames[:] = [d for d in dirnames if not d.startswith(".")]
         for fname in filenames:
             if stop_event.is_set():
                 return
-            fpath = os.path.join(dirpath, fname)
-            yield ("file", fpath)
+            yield ("file", os.path.join(dirpath, fname))
 
 
 # ─── SMB path scanner ─────────────────────────────────────────────────────────
@@ -375,6 +368,68 @@ def _scan_smb(
         yield ("smb_file", smb_path, fname, stat, server, share)
 
 
+# ─── Checkpoint helpers ───────────────────────────────────────────────────────
+
+def _ckpt_path(root: str, reports_dir: str) -> str:
+    """Return the checkpoint file path for a given scan root."""
+    root_hash = hashlib.md5(root.encode("utf-8", "replace")).hexdigest()[:12]
+    return os.path.join(reports_dir, f"checkpoint_{root_hash}.json")
+
+
+def _load_ckpt(ckpt_file: str) -> tuple:
+    """
+    Load a checkpoint file.
+    Returns (last_path: str | None, scanned_count: int).
+    """
+    try:
+        with open(ckpt_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get("last_path"), int(data.get("scanned", 0))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None, 0
+
+
+def _save_ckpt(ckpt_file: str, last_path: str, scanned: int) -> None:
+    """Write a checkpoint file atomically."""
+    try:
+        tmp = ckpt_file + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"last_path": last_path, "scanned": scanned}, f)
+        os.replace(tmp, ckpt_file)
+    except OSError:
+        pass
+
+
+# ─── SQLite schema ────────────────────────────────────────────────────────────
+
+_DB_SCHEMA = """
+PRAGMA journal_mode=WAL;
+
+CREATE TABLE IF NOT EXISTS scans (
+    id          TEXT PRIMARY KEY,
+    scan_path   TEXT,
+    scan_date   TEXT,
+    scanned     INTEGER DEFAULT 0,
+    hits        INTEGER DEFAULT 0,
+    completed   INTEGER DEFAULT 0,
+    started_at  INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS findings (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_id     TEXT NOT NULL,
+    risk_level  TEXT NOT NULL,
+    confidence  INTEGER,
+    file_name   TEXT,
+    full_path   TEXT,
+    data        TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_findings_scan
+    ON findings (scan_id, risk_level);
+"""
+
+
 # ─── Main entry point ─────────────────────────────────────────────────────────
 
 def scan_path(
@@ -386,6 +441,7 @@ def scan_path(
     domain: str = None,
     reports_dir: str = None,
     workers: int = 8,
+    resume: bool = False,
 ) -> Generator:
     """
     Scan root (local path or UNC) and yield JSON-serialisable event dicts.
@@ -394,16 +450,22 @@ def scan_path(
     with `workers` threads analyses files in parallel; results flow through an
     events_queue back to this generator.
 
+    Findings are written to a SQLite DB (<reports_dir>/LeakLens_<id>.db) as they
+    arrive, enabling the paginated /api/findings endpoint to serve historical data.
+    A checkpoint file is updated every 1000 files so the scan can be resumed with
+    resume=True if interrupted.
+
     Event types:
       {type: "log",      message: str}
-      {type: "progress", scanned: int, hits: int, current: str}
+      {type: "progress", scanned: int, hits: int, current: str, rate: float}
       {type: "finding",  ...}
-      {type: "summary",  scanned: int, hits: int, reportFile: str}
+      {type: "summary",  scanned: int, hits: int, reportFile: str, scanId: str}
       {type: "error",    message: str}
     """
-    _FILE_TIMEOUT = 30.0   # seconds before a slow file is skipped
-    _FLUSH_EVERY_N = 500   # partial report flush: every N findings …
-    _FLUSH_EVERY_SECS = 60.0  # … or every 60 seconds, whichever comes first
+    _FLUSH_EVERY_N   = 500    # partial JSON report: flush every N hits …
+    _FLUSH_EVERY_SECS = 60.0  # … or every 60 s, whichever first
+    _CHECKPOINT_EVERY = 1000  # checkpoint: save every N files processed
+    _DB_COMMIT_EVERY  = 50    # SQLite: commit after N inserts
 
     is_smb = is_unc_path(root)
 
@@ -413,7 +475,7 @@ def scan_path(
         yield {"type": "error", "message": "smbprotocol is not installed. Run: pip install smbprotocol"}
         return
 
-    # ── Suppression setup ──────────────────────────────────────────────────────
+    # ── Suppression setup ─────────────────────────────────────────────────────
     if is_smb:
         suppressions = load_suppressions(os.getcwd())
     else:
@@ -422,14 +484,38 @@ def scan_path(
             return
         suppressions = load_suppressions(root)
 
-    # ── Report file paths (set up early so partial is written as findings arrive)
+    # ── Report file paths ─────────────────────────────────────────────────────
     if reports_dir is None:
         reports_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "reports")
 
     os.makedirs(reports_dir, exist_ok=True)
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    report_file = os.path.join(reports_dir, f"LeakLens_{timestamp}.json")
+    timestamp  = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    scan_id    = timestamp
+    report_file  = os.path.join(reports_dir, f"LeakLens_{timestamp}.json")
     partial_file = os.path.join(reports_dir, f"LeakLens_{timestamp}.partial.json")
+    db_file      = os.path.join(reports_dir, f"LeakLens_{timestamp}.db")
+    ckpt_file    = _ckpt_path(root, reports_dir)
+
+    # ── SQLite setup ──────────────────────────────────────────────────────────
+    _db_conn = sqlite3.connect(db_file)
+    _db_conn.executescript(_DB_SCHEMA)
+    _db_conn.execute(
+        "INSERT OR REPLACE INTO scans (id, scan_path, scan_date, started_at) "
+        "VALUES (?, ?, ?, ?)",
+        (scan_id, root, datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), int(time.time())),
+    )
+    _db_conn.commit()
+    _db_pending = 0
+
+    # ── Checkpoint / resume ───────────────────────────────────────────────────
+    _resume_from: str | None = None
+    if resume:
+        _resume_from, _ckpt_scanned = _load_ckpt(ckpt_file)
+        if _resume_from:
+            yield {
+                "type": "log",
+                "message": f"Resuming scan — checkpoint found, skipping up to {_ckpt_scanned} files",
+            }
 
     # SMB share root used for relative paths and suppression checks
     if is_smb:
@@ -438,30 +524,33 @@ def scan_path(
     else:
         unc_share_root = ""
 
-    # ── Shared mutable state — ALL mutations guarded by _lock ──────────────────
-    _lock = threading.Lock()
+    # ── Shared mutable state — ALL mutations guarded by _lock ─────────────────
+    _lock  = threading.Lock()
     _state = {
-        "file_count": 0,
-        "hit_count": 0,
+        "file_count":     0,
+        "hit_count":      0,
         "last_flush_count": 0,
-        "last_flush_time": time.time(),
+        "last_flush_time":  time.time(),
+        "scan_start_time":  time.time(),
     }
     results: list = []
 
     def _flush_partial() -> None:
-        """Atomically write a partial report snapshot to disk (no lock held on I/O)."""
+        """Atomically write a partial report snapshot (no lock held during I/O)."""
         try:
             with _lock:
                 snapshot = list(results)
                 fc = _state["file_count"]
                 hc = _state["hit_count"]
+                _state["last_flush_count"] = hc
+                _state["last_flush_time"]  = time.time()
             tmp = partial_file + ".tmp"
             with open(tmp, "w", encoding="utf-8") as _f:
                 json.dump({
                     "scanPath": root,
                     "scanDate": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "scanned": fc,
-                    "hits": hc,
+                    "hits":    hc,
                     "partial": True,
                     "findings": snapshot,
                 }, _f, indent=2)
@@ -470,15 +559,13 @@ def scan_path(
             pass
 
     # ── Queues ────────────────────────────────────────────────────────────────
-    # file_q: walk → workers.  Bounded to keep memory under control.
-    _file_q: queue.Queue = queue.Queue(maxsize=max(workers * 8, 64))
-    # event_q: workers → main generator.
+    _file_q:  queue.Queue = queue.Queue(maxsize=max(workers * 8, 64))
     _event_q: queue.Queue = queue.Queue()
 
-    # ── Per-file analysis (called from worker threads, no lock held) ───────────
+    # ── Per-file analysis ─────────────────────────────────────────────────────
     def _analyse_item(item: tuple) -> tuple:
         """
-        Analyse a single file item (local or SMB).
+        Analyse one file item (local or SMB).
         Returns (finding_dict_or_None, file_path_str).
         """
         if item[0] == "file":
@@ -493,15 +580,15 @@ def scan_path(
 
         # "smb_file"
         _, smb_path, fname, stat, _srv, _shr = item
-        ext = os.path.splitext(fname)[1].lower()
+        ext       = os.path.splitext(fname)[1].lower()
         name_base = os.path.splitext(fname.lower())[0]
         binary_risk = ext in FLAGGED_EXTENSIONS
-        risky_name = (
+        risky_name  = (
             fname.lower() in FLAGGED_EXACT_NAMES
             or any(n in name_base for n in FLAGGED_NAMES)
         )
         size_bytes = stat.st_size if hasattr(stat, "st_size") else 0
-        matched = []
+        matched    = []
 
         if binary_risk:
             pass
@@ -528,24 +615,17 @@ def scan_path(
             rel_path = smb_path
 
         smb_meta = {
-            "smbShare": unc_share_root,
-            "smbServer": _srv,
+            "smbShare":        unc_share_root,
+            "smbServer":       _srv,
             "smbRelativePath": rel_path,
         }
 
         finding = build_finding(
-            path=smb_path,
-            ext=ext,
-            size_bytes=size_bytes,
-            last_modified=last_modified,
-            last_accessed=last_accessed,
-            owner="",
-            matched_patterns=matched,
-            risky_name=risky_name,
-            binary_risk=binary_risk,
-            smb_meta=smb_meta,
+            path=smb_path, ext=ext, size_bytes=size_bytes,
+            last_modified=last_modified, last_accessed=last_accessed,
+            owner="", matched_patterns=matched,
+            risky_name=risky_name, binary_risk=binary_risk, smb_meta=smb_meta,
         )
-
         if finding is None:
             return None, smb_path
 
@@ -555,8 +635,16 @@ def scan_path(
 
         return finding, smb_path
 
-    # ── Walk thread: feeds _file_q ─────────────────────────────────────────────
+    # ── Walk thread ───────────────────────────────────────────────────────────
     def _walk() -> None:
+        """
+        Walk the filesystem and enqueue file items into _file_q.
+        If resuming, skips files until _resume_from path is passed.
+        Errors/logs go directly to _event_q (never to _file_q).
+        """
+        _skipping = _resume_from is not None
+        skipped   = 0
+
         try:
             if is_smb:
                 for ev in _scan_smb(root, max_size, stop_event, username, password, domain):
@@ -568,19 +656,35 @@ def scan_path(
                     if ev[0] == "log":
                         _event_q.put({"type": "log", "message": ev[1]})
                         continue
-                    _file_q.put(ev)   # blocks if queue full (natural backpressure)
+                    # "smb_file" — resume skip check
+                    if _skipping:
+                        if ev[1] == _resume_from:
+                            _skipping = False
+                        skipped += 1
+                        continue
+                    _file_q.put(ev)
             else:
                 for ev in _scan_local(root, max_size, stop_event):
                     if stop_event.is_set():
                         break
+                    if _skipping:
+                        if ev[1] == _resume_from:
+                            _skipping = False
+                        skipped += 1
+                        continue
                     _file_q.put(ev)
         finally:
-            # Poison pill: one per worker so each exits its get() loop
+            if skipped > 0:
+                _event_q.put({
+                    "type": "log",
+                    "message": f"Resumed — skipped {skipped} already-scanned files.",
+                })
             for _ in range(workers):
-                _file_q.put(None)
+                _file_q.put(None)   # poison pill per worker
 
-    # ── Worker: consumes _file_q, puts events into _event_q ───────────────────
+    # ── Worker ────────────────────────────────────────────────────────────────
     def _worker() -> None:
+        """Consume _file_q, analyse files, emit events to _event_q."""
         while not stop_event.is_set():
             try:
                 item = _file_q.get(timeout=1.0)
@@ -588,30 +692,17 @@ def scan_path(
                 continue
 
             if item is None:
-                break   # poison pill received
+                break   # poison pill
 
-            fpath = item[1] if len(item) > 1 else "?"
+            fpath   = item[1] if len(item) > 1 else "?"
             finding = None
 
-            # Submit analysis with a per-file timeout so one slow file can't
-            # stall a worker indefinitely (SMB connection_timeout=30 handles
-            # most hangs, but this is an additional safety net).
-            with ThreadPoolExecutor(max_workers=1) as _inner:
-                fut = _inner.submit(_analyse_item, item)
-                done_futs, _ = fut_wait([fut], timeout=_FILE_TIMEOUT)
+            try:
+                finding, fpath = _analyse_item(item)
+            except Exception as e:
+                _event_q.put({"type": "log", "message": f"[ERROR] {fpath}: {e}"})
 
-            if not done_futs:
-                _event_q.put({
-                    "type": "log",
-                    "message": f"[TIMEOUT] Skipped slow file (>{_FILE_TIMEOUT:.0f}s): {fpath}",
-                })
-            else:
-                try:
-                    finding, fpath = fut.result()
-                except Exception as e:
-                    _event_q.put({"type": "log", "message": f"[ERROR] {fpath}: {e}"})
-
-            # Always increment file_count exactly once per file
+            # Update shared counters exactly once per file
             need_flush = False
             with _lock:
                 _state["file_count"] += 1
@@ -620,73 +711,149 @@ def scan_path(
                     _state["hit_count"] += 1
                     hc = _state["hit_count"]
                     results.append(finding)
-                    # Optimistically claim the flush slot to prevent double-flush
                     if (hc - _state["last_flush_count"] >= _FLUSH_EVERY_N or
                             time.time() - _state["last_flush_time"] >= _FLUSH_EVERY_SECS):
                         need_flush = True
                         _state["last_flush_count"] = hc
-                        _state["last_flush_time"] = time.time()
+                        _state["last_flush_time"]  = time.time()
                 else:
                     hc = _state["hit_count"]
 
             if finding is not None:
                 _event_q.put(finding)
+
             if fc % 100 == 0 or fc == 1:
+                elapsed = max(0.001, time.time() - _state["scan_start_time"])
+                rate    = round(fc / elapsed, 1)
                 _event_q.put({
-                    "type": "progress",
+                    "type":    "progress",
                     "scanned": fc,
-                    "hits": hc,
+                    "hits":    hc,
                     "current": fpath,
+                    "rate":    rate,
                 })
+
             if need_flush:
                 _flush_partial()
 
-        _event_q.put(("__done__",))   # signal this worker has finished
+        _event_q.put(("__done__",))
 
-    # ── Orchestrate: start walk + worker pool, consume events ─────────────────
+    # ── Orchestrate ───────────────────────────────────────────────────────────
     walk_thread = threading.Thread(target=_walk, daemon=True)
     walk_thread.start()
+
+    _ckpt_last_scanned = 0
+    _ckpt_last_path    = ""
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         for _ in range(workers):
             executor.submit(_worker)
 
-        # Drain events_queue until all workers signal done
         done_workers = 0
-        fatal_error = False
+        fatal_error  = False
+
         while done_workers < workers:
             item = _event_q.get()
+
             if isinstance(item, tuple) and item == ("__done__",):
                 done_workers += 1
                 continue
             if not isinstance(item, dict):
                 continue
+
+            ev_type = item.get("type")
+
+            # Persist findings to SQLite
+            if ev_type == "finding":
+                try:
+                    _db_conn.execute(
+                        "INSERT INTO findings "
+                        "(scan_id, risk_level, confidence, file_name, full_path, data) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (
+                            scan_id,
+                            item["riskLevel"],
+                            item.get("confidence"),
+                            item.get("fileName"),
+                            item.get("fullPath"),
+                            json.dumps(item),
+                        ),
+                    )
+                    _db_pending += 1
+                    if _db_pending >= _DB_COMMIT_EVERY:
+                        _db_conn.commit()
+                        _db_pending = 0
+                except Exception:
+                    pass
+
+            # Checkpoint on progress events
+            elif ev_type == "progress":
+                cur     = item.get("current", "")
+                scanned = item.get("scanned", 0)
+                if cur:
+                    _ckpt_last_path = cur
+                if (scanned - _ckpt_last_scanned >= _CHECKPOINT_EVERY
+                        and _ckpt_last_path):
+                    _save_ckpt(ckpt_file, _ckpt_last_path, scanned)
+                    _ckpt_last_scanned = scanned
+
             yield item
-            if item.get("type") == "error":
+
+            if ev_type == "error":
                 fatal_error = True
                 stop_event.set()
 
     walk_thread.join(timeout=5)
 
+    # Commit any remaining SQLite inserts
+    if _db_pending > 0:
+        try:
+            _db_conn.commit()
+        except Exception:
+            pass
+
     if fatal_error:
+        try:
+            _db_conn.close()
+        except Exception:
+            pass
         return
 
     with _lock:
         fc = _state["file_count"]
         hc = _state["hit_count"]
 
-    # Final progress tick
-    yield {"type": "progress", "scanned": fc, "hits": hc, "current": ""}
+    yield {"type": "progress", "scanned": fc, "hits": hc, "current": "", "rate": 0}
+
+    # ── Finalise SQLite scan record ───────────────────────────────────────────
+    try:
+        _db_conn.execute(
+            "UPDATE scans SET scanned=?, hits=?, completed=1 WHERE id=?",
+            (fc, hc, scan_id),
+        )
+        _db_conn.commit()
+    except Exception:
+        pass
+
+    # Delete checkpoint on successful completion
+    try:
+        os.remove(ckpt_file)
+    except OSError:
+        pass
+
+    try:
+        _db_conn.close()
+    except Exception:
+        pass
 
     # ── Save final JSON report ────────────────────────────────────────────────
     report = {
         "scanPath": root,
         "scanDate": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "scanned": fc,
-        "hits": hc,
+        "scanned":  fc,
+        "hits":     hc,
         "findings": results,
     }
-
     try:
         with open(report_file, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2)
@@ -699,4 +866,10 @@ def scan_path(
         yield {"type": "log", "message": f"Could not save report: {e}"}
         report_file = ""
 
-    yield {"type": "summary", "scanned": fc, "hits": hc, "reportFile": report_file}
+    yield {
+        "type":       "summary",
+        "scanned":    fc,
+        "hits":       hc,
+        "reportFile": report_file,
+        "scanId":     scan_id,
+    }
