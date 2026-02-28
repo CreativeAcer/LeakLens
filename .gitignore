@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Node (legacy backend — kept for reference)
+node_modules/
+
+# Reports (generated at runtime)
+reports/
+
+# OS
+.DS_Store
+Thumbs.db
