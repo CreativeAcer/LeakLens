@@ -20,7 +20,10 @@ Scans Windows file shares (and local paths) for exposed credentials:
 - Flags sensitive file types (`.pfx`, `.ppk`, `.kdbx`, `.pem`, ...) and risky filenames (`id_rsa`, `credentials`, `.env`, ...)
 - Scores every finding 1–10 so you spend time on what matters
 - Shows the **exact matched line and line number** for every content finding — no need to open the file
-- Streams results to a browser UI in real time
+- Streams results to a browser UI in real time using Server-Sent Events
+- Scans files in parallel using a configurable number of worker threads
+- Saves findings to a **SQLite database** per scan for fast historical querying
+- Can **resume interrupted scans** from a checkpoint without rescanning files already processed
 - Saves a timestamped JSON report of every scan, browseable in the **Reports tab**
 
 ---
@@ -31,8 +34,6 @@ Scans Windows file shares (and local paths) for exposed credentials:
 - Dependencies install automatically on first run:
   - `flask>=3.0`
   - `smbprotocol>=1.13`
-
-No Node.js. No PowerShell.
 
 ---
 
@@ -66,9 +67,11 @@ Opens at **http://localhost:3000**.
    - Or enter domain credentials for authenticated scans
 3. Click **Discover Shares** to enumerate all visible shares on a server
 4. Set the max file size to scan (default: 10 MB)
-5. Click **Start Scan**
-6. Findings stream in as they are found — click any row to see the **matched line**, file metadata, and remediation advice
-7. Open the **Reports** tab at any time to reload a previous scan
+5. Set the number of **Worker Threads** (1–32, default 8) to control scan parallelism
+6. Enable **Resume** to continue a previously interrupted scan from its checkpoint
+7. Click **Start Scan**
+8. Findings stream in as they are found — click any row to see the **matched line**, file metadata, and remediation advice
+9. Open the **Reports** tab at any time to reload a previous scan
 
 ---
 
@@ -89,9 +92,11 @@ Opens at **http://localhost:3000**.
 | Slack Token | `xoxb-…`, `xoxp-…` | 10/10 |
 | SendGrid API Key | `SG.xxxx.xxxx` | 10/10 |
 | Azure Client Secret / Storage Key | Azure credential formats | 7–8/10 |
+| DPAPI Encrypted Blob | DPAPI blob headers (base64 or hex) | 8/10 |
 | API Key / Bearer Token | Key assignments and `Bearer` tokens | 6/10 |
 | Private Key Header | `-----BEGIN … PRIVATE KEY-----` | 10/10 |
 | Net Use Credential | `net use /user:` commands | 7/10 |
+| PowerShell SecureString | Hardcoded `ConvertTo-SecureString` literals | 7/10 |
 | PowerShell PSCredential | Hardcoded `PSCredential` objects | 6/10 |
 | SQL sa Password | `sa password =` | 8/10 |
 | MD5 / SHA1 / SHA256 / SHA512 | Hash strings by length | 3–4/10 |
@@ -165,9 +170,29 @@ Lines are truncated at 120 characters. Findings flagged only by file type or fil
 
 ## Scan reports
 
-Every completed scan is saved as a timestamped JSON file in the `reports/` directory. The **Reports** tab in the UI lists all saved reports — click any entry to reload its findings into the main view, complete with filtering, search, and the detail drawer.
+Every completed scan is saved as a timestamped **JSON file** (`LeakLens_<timestamp>.json`) and a **SQLite database** (`LeakLens_<timestamp>.db`) in the `reports/` directory.
 
-Reports are also available directly via `GET /api/reports` and `GET /api/reports/<filename>`.
+The **Reports** tab in the UI lists all saved reports — click any entry to reload its findings into the main view, complete with filtering, search, and the detail drawer.
+
+The SQLite database enables fast paginated queries against historical scans without loading the entire result set into memory.
+
+---
+
+## Resume interrupted scans
+
+If a scan is stopped before completion, LeakLens writes a checkpoint file to `reports/`. Enabling the **Resume** checkbox on the next scan of the same path will skip already-processed files and continue from where it left off.
+
+---
+
+## Multi-threaded scanning
+
+The scanner uses a producer/consumer architecture:
+
+- A single **walk thread** traverses the file tree and feeds a bounded queue
+- A configurable number of **worker threads** (default 8, max 32) analyse files in parallel
+- Results flow through an events queue back to the SSE generator
+
+This allows I/O-bound SMB reads to overlap with CPU-bound pattern matching. The current scan rate (files/second) is shown live in the progress bar.
 
 ---
 
@@ -200,6 +225,43 @@ The detail drawer also surfaces this information alongside tailored remediation 
 ---
 
 ![LeakLens scan screenshot](Images/Home-scanned.png)
+
+---
+
+## API reference
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/scan` | Start a scan. Returns an SSE stream of events. |
+| `POST` | `/api/scan/stop` | Stop the active scan. |
+| `GET` | `/api/status` | `{scanning: bool, version: str}` |
+| `POST` | `/api/shares` | Enumerate SMB shares on a host. |
+| `GET` | `/api/reports` | List completed JSON report files. |
+| `GET` | `/api/reports/<name>` | Download a specific report file. |
+| `GET` | `/api/scans` | List all SQLite-backed scan metadata. |
+| `GET` | `/api/findings` | Paginated findings query against a scan DB. |
+
+### POST /api/scan — body parameters
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `scanPath` | string | — | UNC or local path to scan (required) |
+| `maxFileSizeMB` | int | 10 | Skip files larger than this |
+| `workers` | int | 8 | Number of parallel worker threads (1–32) |
+| `resume` | bool | false | Resume from the last checkpoint for this path |
+| `username` | string | — | SMB username |
+| `password` | string | — | SMB password |
+| `domain` | string | — | SMB domain |
+
+### GET /api/findings — query parameters
+
+| Parameter | Default | Description |
+|---|---|---|
+| `scan_id` | — | Required. Timestamp ID of the scan (e.g. `20240101_120000`) |
+| `page` | 0 | 0-based page number |
+| `per_page` | 100 | Rows per page (1–500) |
+| `risk` | ALL | Filter by risk: `HIGH`, `MEDIUM`, `LOW`, or `ALL` |
+| `search` | — | Substring filter on filename or full path |
 
 ---
 
@@ -245,17 +307,17 @@ Expected findings across the 8 test files:
 
 ```
 LeakLens/
-├── leaklens.py            # Entry point — Flask server + SSE streaming
+├── leaklens.py            # Entry point — Flask server + all API routes
 ├── scanner/
-│   ├── engine.py          # Scanning logic — local and SMB paths
-│   ├── patterns.py        # Detection rules with confidence scores
+│   ├── engine.py          # Scanning logic — local and SMB paths, SQLite, checkpoints
+│   ├── patterns.py        # Detection rules with confidence scores (pre-compiled)
 │   └── smb.py             # SMB/UNC helpers (smbprotocol)
 ├── frontend/
-│   └── index.html         # Browser UI
+│   └── index.html         # Browser UI (SSE client, virtual scroll, filters)
 ├── requirements.txt
 ├── start.bat              # Windows launcher
 ├── start.sh               # Linux/macOS launcher
-├── reports/               # JSON scan reports (auto-created)
+├── reports/               # SQLite databases + JSON reports (auto-created)
 └── testserver/            # Samba container for testing
 ```
 
@@ -263,7 +325,9 @@ LeakLens/
 
 ## How it works
 
-`leaklens.py` starts a Flask server that serves the frontend and exposes `POST /api/scan`. When a scan starts, a background thread runs `scanner/engine.py`, which walks the target path — local or SMB — matches patterns, applies confidence scoring and suppression rules, and yields findings as JSON. The browser reads these as **Server-Sent Events** streamed directly from the POST response body.
+`leaklens.py` starts a Flask server that serves the frontend and exposes `POST /api/scan`. When a scan starts, a walk thread traverses the target path — local or SMB — feeding a bounded queue. A pool of worker threads analyses files in parallel, matching patterns, applying confidence scoring and suppression rules, and emitting findings as JSON events. The browser reads these as **Server-Sent Events** streamed directly from the POST response body.
+
+Findings are persisted to a per-scan SQLite database as they arrive, enabling the paginated `/api/findings` endpoint to serve historical data efficiently without re-loading JSON reports.
 
 ---
 
