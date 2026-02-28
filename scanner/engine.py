@@ -134,10 +134,12 @@ def is_suppressed(path: str, pattern_ids: list, suppressions: dict, root: str) -
 def scan_content(content: str, path: str) -> list:
     """
     Match all content patterns against the file text.
-    Returns a list of matched pattern dicts (id, name, confidence, risk).
+    Returns a list of matched pattern dicts (id, name, confidence, risk,
+    matchLine, matchSnippet).
     Applies confidence adjustments for docs paths and placeholder values.
     """
     in_docs = is_docs_path(path)
+    lines = content.split('\n')
     matched = []
 
     for pattern in CONTENT_PATTERNS:
@@ -159,11 +161,18 @@ def scan_content(content: str, path: str) -> list:
         if in_docs:
             conf = max(1, conf - 3)
 
+        # Extract match location and the full line it appeared on
+        line_num = content[:m.start()].count('\n') + 1
+        raw_line = lines[line_num - 1].strip() if line_num <= len(lines) else m.group(0)
+        snippet = raw_line[:120] + ('…' if len(raw_line) > 120 else '')
+
         matched.append({
             "id": pattern["id"],
             "name": pattern["name"],
             "confidence": conf,
             "risk": get_risk_level(conf),
+            "matchLine": line_num,
+            "matchSnippet": snippet,
         })
 
     return matched
@@ -433,7 +442,7 @@ def scan_path(
 
             if binary_risk:
                 pass
-            elif ext in TARGET_EXTENSIONS:
+            elif ext in TARGET_EXTENSIONS or (risky_name and ext == ""):
                 if size_bytes <= max_size:
                     content = read_smb_file(smb_path, max_size)
                     if content:

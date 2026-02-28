@@ -173,6 +173,30 @@ CONTENT_PATTERNS = [
         "confidence": 8,
         "risk": "HIGH",
     },
+    {
+        "id": "stripe_key",
+        "name": "Stripe API Key",
+        # sk_live_ = production secret key, sk_test_ = test secret key
+        "regex": r'\bsk_(live|test)_[A-Za-z0-9]{24,}\b',
+        "confidence": 10,
+        "risk": "HIGH",
+    },
+    {
+        "id": "slack_token",
+        "name": "Slack Token",
+        # xoxb = bot token, xoxa = app token, xoxp = user token, xoxs = workspace token
+        "regex": r'\bxox[abps]-[0-9A-Za-z-]{10,}\b',
+        "confidence": 10,
+        "risk": "HIGH",
+    },
+    {
+        "id": "sendgrid_key",
+        "name": "SendGrid API Key",
+        # SendGrid keys: SG. + ~22 base64url chars + . + ~43 base64url chars
+        "regex": r'\bSG\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{40,}\b',
+        "confidence": 10,
+        "risk": "HIGH",
+    },
 ]
 
 # File extensions that are flagged regardless of content
