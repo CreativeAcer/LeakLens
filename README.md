@@ -241,9 +241,8 @@ The detail drawer also surfaces this information alongside tailored remediation 
 | `POST` | `/api/scan/stop` | Stop the active scan. |
 | `GET` | `/api/status` | `{scanning: bool, version: str}` |
 | `POST` | `/api/shares` | Enumerate SMB shares on a host. |
-| `GET` | `/api/reports` | List completed JSON report files. |
-| `GET` | `/api/reports/<name>` | Download a specific report file. |
 | `GET` | `/api/scans` | List all SQLite-backed scan metadata. |
+| `GET` | `/api/scans/<scan_id>/export` | Export all findings for a scan as JSON. |
 | `GET` | `/api/findings` | Paginated findings query against a scan DB. |
 
 ### POST /api/scan — body parameters
