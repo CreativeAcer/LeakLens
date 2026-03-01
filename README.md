@@ -1,12 +1,76 @@
-# LeakLens
+<p align="center">
+  <b>LeakLens – Credential Exposure Scanner for File Shares</b>
+</p>
+
+<p align="center">
+  <a href="https://github.com/CreativeAcer/LeakLens/stargazers">
+    <img src="https://img.shields.io/github/stars/CreativeAcer/LeakLens?style=for-the-badge" />
+  </a>
+  <a href="https://github.com/CreativeAcer/LeakLens/forks">
+    <img src="https://img.shields.io/github/forks/CreativeAcer/LeakLens?style=for-the-badge" />
+  </a>
+  <a href="https://github.com/CreativeAcer/LeakLens/issues">
+    <img src="https://img.shields.io/github/issues/CreativeAcer/LeakLens?style=for-the-badge" />
+  </a>
+  <a href="https://github.com/CreativeAcer/LeakLens/blob/main/LICENSE">
+    <img src="https://img.shields.io/github/license/CreativeAcer/LeakLens?style=for-the-badge" />
+  </a>
+  <a href="https://github.com/CreativeAcer/LeakLens/releases">
+    <img src="https://img.shields.io/github/v/release/CreativeAcer/LeakLens?style=for-the-badge" />
+  </a>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white" />
+  <img src="https://img.shields.io/badge/JavaScript-F7DF1E?style=for-the-badge&logo=javascript&logoColor=black" />
+  <img src="https://img.shields.io/badge/CSS-1572B6?style=for-the-badge&logo=css3&logoColor=white" />
+  <img src="https://img.shields.io/badge/HTML-E34F26?style=for-the-badge&logo=html5&logoColor=white" />
+  <img src="https://img.shields.io/badge/Shell-121011?style=for-the-badge&logo=gnu-bash&logoColor=white" />
+  <img src="https://img.shields.io/badge/Batchfile-4D4D4D?style=for-the-badge&logo=windows&logoColor=white" />
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Open%20Source-❤-success?style=for-the-badge" />
+  <img src="https://img.shields.io/badge/Security-Credential_Scanner-critical?style=for-the-badge" />
+  <img src="https://img.shields.io/badge/Use%20Case-File_Share_Auditing-informational?style=for-the-badge" />
+</p>
 
 ![LeakLens Banner](Images/leaklens-banner.svg)
 
-**The file share credential scanner for pentesters and security auditors.**
+<div align="center">
 
-Tools like truffleHog and gitleaks are built for git repositories and much more, but a bit more complex to use (Be sure to check out those repo's if you need more feature rich tools). LeakLens scans `\\server\share` in a simple way. Without mounting, with confidence-scored findings streamed to a browser in real time.
+### 🔍 Catch exposed credentials on file shares before they become an incident
+
+LeakLens scans SMB/UNC shares and local paths for passwords, keys, tokens, and secrets —  
+with **confidence scoring**, **live browser streaming**, and **zero mounting required**.
+
+**Built for pentesters • Blue teams • Security auditors • DFIR**
+
+<a href="https://github.com/CreativeAcer/LeakLens">
+  <img src="https://img.shields.io/badge/View%20on-GitHub-black?style=for-the-badge&logo=github" />
+</a>
+<a href="#quick-start">
+  <img src="https://img.shields.io/badge/Get%20Started-Quick%20Start-success?style=for-the-badge" />
+</a>
+
+</div>
+
+Tools like truffleHog and gitleaks excel at scanning Git repositories and CI artifacts.
+LeakLens targets a different, often neglected attack surface: shared folders and internal file servers. It scans `\\server\share` directly, no mounting and streams confidence-scored findings to a browser in real time. 
 
 Born from a pentest finding: a domain admin password sitting in a plaintext `.ps1` file on an open file share, readable by every user in the domain. LeakLens exists to find those before an attacker does.
+
+### How LeakLens fits alongside other secret scanners
+
+LeakLens complements tools like truffleHog and gitleaks by focusing on a different attack surface: file shares and internal paths.
+
+| Tool       | Primary focus            | Native SMB/UNC scanning | Filesystem paths | Git history | Live UI streaming | Resume scans |
+|------------|--------------------------|-------------------------|------------------|-------------|-------------------|--------------|
+| LeakLens   | File shares, local paths | ✅ Yes                  | ✅ Yes           | ❌ No       | ✅ Yes            | ✅ Yes       |
+| truffleHog | Git, CI, artifacts       | ❌ No (mount required)  | ⚠️ Yes           | ✅ Yes      | ❌ No             | ❌ No        |
+| gitleaks   | Git repos & commits      | ❌ No                   | ❌ No            | ✅ Yes      | ❌ No             | ❌ No        |
+
+LeakLens is not a replacement for repository secret scanners, it fills the gap where credentials leak into shared folders, scripts, and internal file servers.
 
 ---
 
@@ -24,7 +88,7 @@ Scans Windows file shares (and local paths) for exposed credentials:
 - Scans files in parallel using a configurable number of worker threads
 - Saves findings to a **SQLite database** per scan for fast historical querying
 - Can **resume interrupted scans** from a checkpoint without rescanning files already processed
-- Saves a timestamped JSON report of every scan, browseable in the **Reports tab**
+- Saves a timestamped JSON report of every scan, browsable in the **Reports tab**
 
 ---
 
@@ -390,3 +454,6 @@ Findings are persisted to a per-scan SQLite database as they arrive, enabling th
 ## Legal
 
 Run LeakLens only on systems and file shares you are authorized to access. Scanning reads file contents — ensure you have the appropriate permissions before use.
+
+> LeakLens is open source and community-driven.
+> Bug reports, feature requests, and PRs are welcome. Especially new detection patterns and test cases.
