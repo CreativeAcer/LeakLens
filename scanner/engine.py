@@ -3,11 +3,7 @@ LeakLens scanner engine.
 Replaces backend/scanner.ps1 — pure Python, handles local paths and UNC/SMB paths.
 """
 
-import hashlib
 import os
-import pathlib
-import re
-import fnmatch
 import datetime
 import json
 import queue
@@ -18,15 +14,14 @@ from concurrent.futures import ThreadPoolExecutor, wait as fut_wait
 from typing import Generator
 
 from scanner.patterns import (
-    COMPILED_PATTERNS,
     FLAGGED_EXTENSIONS,
     FLAGGED_NAMES,
     FLAGGED_EXACT_NAMES,
     TARGET_EXTENSIONS,
-    PLACEHOLDER_VALUES,
-    DOCS_DIRS,
-    HASH_PATTERN_IDS,
 )
+from scanner.content import scan_content, build_finding
+from scanner.suppress import load_suppressions, is_suppressed
+from scanner.checkpoint import _ckpt_path, _load_ckpt, _save_ckpt
 from scanner.smb import (
     is_unc_path,
     normalize_unc,
@@ -36,228 +31,6 @@ from scanner.smb import (
     read_smb_file,
     SMB_AVAILABLE,
 )
-
-
-# ─── Helpers ──────────────────────────────────────────────────────────────────
-
-def get_risk_level(confidence: int) -> str:
-    if confidence >= 8:
-        return "HIGH"
-    if confidence >= 5:
-        return "MEDIUM"
-    return "LOW"
-
-
-def is_placeholder(value: str) -> bool:
-    v = value.strip().lower().strip("\"'`")
-    return (
-        v in PLACEHOLDER_VALUES
-        or v.startswith("<")
-        or v.startswith("${")
-        or v.startswith("%(")
-        or v.startswith("{{")
-        or len(v) < 4
-        or bool(re.match(r"^\*+$", v))
-        or bool(re.match(r"^x+$", v))
-    )
-
-
-def is_placeholder_match(match_str: str) -> bool:
-    """
-    Post-match filter applied to every pattern result.
-    Tries to extract the value portion (after = or :) and check it against
-    PLACEHOLDER_VALUES — catches noise that inline lookaheads don't cover.
-    """
-    m = re.search(r'[=:]\s*["\']?([^\s"\'<>{}]{4,})', match_str)
-    if not m:
-        return False
-    return is_placeholder(m.group(1))
-
-
-def is_docs_path(path: str) -> bool:
-    """
-    Return True if any exact path segment matches a docs/examples directory name.
-    Uses pathlib to avoid substring false positives (e.g. 'docs_archive' should not match).
-    """
-    parts = pathlib.Path(path.replace("\\", "/")).parts
-    return any(part.lower() in DOCS_DIRS for part in parts)
-
-
-# ─── Suppression (.leaklensignore) ────────────────────────────────────────────
-
-def load_suppressions(root: str) -> dict:
-    """
-    Parse .leaklensignore from the scan root.
-    Returns {'global': [...], 'patterns': {pattern_id: [...]}}
-    """
-    suppressions = {"global": [], "patterns": {}}
-    ignore_file = os.path.join(root, ".leaklensignore")
-    if not os.path.exists(ignore_file):
-        return suppressions
-
-    current_section = None
-    try:
-        with open(ignore_file, "r", encoding="utf-8", errors="ignore") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                if line.startswith("[") and line.endswith("]"):
-                    current_section = line[1:-1]
-                    suppressions["patterns"].setdefault(current_section, [])
-                elif current_section:
-                    suppressions["patterns"][current_section].append(line)
-                else:
-                    suppressions["global"].append(line)
-    except OSError:
-        pass
-
-    return suppressions
-
-
-def is_suppressed(path: str, pattern_ids: list, suppressions: dict, root: str) -> bool:
-    """Return True if this finding should be suppressed per .leaklensignore."""
-    try:
-        rel = os.path.relpath(path, root).replace("\\", "/")
-    except ValueError:
-        rel = path.replace("\\", "/")
-
-    for glob_pat in suppressions["global"]:
-        if fnmatch.fnmatch(rel, glob_pat):
-            return True
-
-    for pid in pattern_ids:
-        for glob_pat in suppressions["patterns"].get(pid, []):
-            if fnmatch.fnmatch(rel, glob_pat):
-                return True
-
-    return False
-
-
-# ─── Content scanning ─────────────────────────────────────────────────────────
-
-def scan_content(content: str, path: str) -> list:
-    """
-    Match all content patterns against the file text.
-    Returns a list of matched pattern dicts (id, name, confidence, risk,
-    matchLine, matchSnippet, matchCount, allMatchLines).
-    Uses pre-compiled patterns and re.finditer() to capture every occurrence.
-    Applies confidence adjustments for docs paths and placeholder values.
-    """
-    in_docs = is_docs_path(path)
-    lines = content.split('\n')
-    matched = []
-
-    for pattern in COMPILED_PATTERNS:
-        try:
-            hit_matches = []
-            for m in pattern["regex"].finditer(content):
-                if is_placeholder_match(m.group(0)):
-                    continue
-                line_num = content[:m.start()].count('\n') + 1
-                raw_line = lines[line_num - 1].strip() if line_num <= len(lines) else m.group(0)
-                snippet = raw_line[:120] + ('…' if len(raw_line) > 120 else '')
-                hit_matches.append({"line": line_num, "snippet": snippet})
-        except re.error:
-            continue
-
-        if not hit_matches:
-            continue
-
-        conf = pattern["confidence"]
-        if in_docs:
-            conf = max(1, conf - 3)
-
-        matched.append({
-            "id": pattern["id"],
-            "name": pattern["name"],
-            "confidence": conf,
-            "risk": get_risk_level(conf),
-            "matchLine": hit_matches[0]["line"],
-            "matchSnippet": hit_matches[0]["snippet"],
-            "matchCount": len(hit_matches),
-            "allMatchLines": [h["line"] for h in hit_matches],
-        })
-
-    return matched
-
-
-# ─── Per-file check ───────────────────────────────────────────────────────────
-
-def build_finding(
-    path: str,
-    ext: str,
-    size_bytes: int,
-    last_modified: str,
-    last_accessed: str,
-    owner: str,
-    matched_patterns: list,
-    risky_name: bool,
-    binary_risk: bool,
-    smb_meta: dict = None,
-) -> dict:
-    """Assemble a finding dict from the per-file analysis."""
-    all_findings = list(matched_patterns)
-
-    if binary_risk:
-        all_findings.insert(0, {
-            "id": "sensitive_file_type",
-            "name": f"Sensitive file type ({ext})",
-            "confidence": 8,
-            "risk": "HIGH",
-        })
-    if risky_name:
-        all_findings.append({
-            "id": "risky_filename",
-            "name": "Suspicious filename",
-            "confidence": 5,
-            "risk": "MEDIUM",
-        })
-
-    if not all_findings:
-        return None
-
-    max_conf = max(f["confidence"] for f in all_findings)
-    overall_risk = get_risk_level(max_conf)
-
-    non_hash = [f for f in all_findings
-                if f["id"] not in HASH_PATTERN_IDS and f["id"] != "risky_filename"]
-    hash_only = (
-        not non_hash
-        and any(f["id"] in HASH_PATTERN_IDS for f in all_findings)
-    )
-    if hash_only:
-        overall_risk = "LOW"
-        max_conf = min(max_conf, 4)
-
-    finding = {
-        "type": "finding",
-        "riskLevel": overall_risk,
-        "confidence": max_conf,
-        "fileName": os.path.basename(path),
-        "fullPath": path,
-        "extension": ext,
-        "sizeKB": round(size_bytes / 1024, 1),
-        "lastModified": last_modified,
-        "lastAccessed": last_accessed,
-        "owner": owner,
-        "riskyFilename": risky_name,
-        "hashOnly": hash_only,
-        "findings": " | ".join(f["name"] for f in all_findings),
-        "findingsList": [f["name"] for f in all_findings],
-        "findingsDetail": all_findings,
-    }
-
-    if hash_only:
-        finding["note"] = (
-            "Hash strings detected — verify these are credential hashes "
-            "and not integrity checksums."
-        )
-
-    if smb_meta:
-        finding.update(smb_meta)
-
-    return finding
 
 
 # ─── Local path scanner ───────────────────────────────────────────────────────
@@ -366,38 +139,6 @@ def _scan_smb(
             continue
         smb_path, fname, stat = item
         yield ("smb_file", smb_path, fname, stat, server, share)
-
-
-# ─── Checkpoint helpers ───────────────────────────────────────────────────────
-
-def _ckpt_path(root: str, reports_dir: str) -> str:
-    """Return the checkpoint file path for a given scan root."""
-    root_hash = hashlib.md5(root.encode("utf-8", "replace")).hexdigest()[:12]
-    return os.path.join(reports_dir, f"checkpoint_{root_hash}.json")
-
-
-def _load_ckpt(ckpt_file: str) -> tuple:
-    """
-    Load a checkpoint file.
-    Returns (last_path: str | None, scanned_count: int).
-    """
-    try:
-        with open(ckpt_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data.get("last_path"), int(data.get("scanned", 0))
-    except (OSError, json.JSONDecodeError, ValueError):
-        return None, 0
-
-
-def _save_ckpt(ckpt_file: str, last_path: str, scanned: int) -> None:
-    """Write a checkpoint file atomically."""
-    try:
-        tmp = ckpt_file + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"last_path": last_path, "scanned": scanned}, f)
-        os.replace(tmp, ckpt_file)
-    except OSError:
-        pass
 
 
 # ─── SQLite schema ────────────────────────────────────────────────────────────
