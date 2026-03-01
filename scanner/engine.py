@@ -204,11 +204,9 @@ def scan_path(
       {type: "log",      message: str}
       {type: "progress", scanned: int, hits: int, current: str, rate: float}
       {type: "finding",  ...}
-      {type: "summary",  scanned: int, hits: int, reportFile: str, scanId: str}
+      {type: "summary",  scanned: int, hits: int, scanId: str}
       {type: "error",    message: str}
     """
-    _FLUSH_EVERY_N   = 500    # partial JSON report: flush every N hits …
-    _FLUSH_EVERY_SECS = 60.0  # … or every 60 s, whichever first
     _CHECKPOINT_EVERY = 1000  # checkpoint: save every N files processed
     _DB_COMMIT_EVERY  = 50    # SQLite: commit after N inserts
 
@@ -236,9 +234,7 @@ def scan_path(
     os.makedirs(reports_dir, exist_ok=True)
     timestamp  = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     scan_id    = timestamp
-    report_file  = os.path.join(reports_dir, f"LeakLens_{timestamp}.json")
-    partial_file = os.path.join(reports_dir, f"LeakLens_{timestamp}.partial.json")
-    db_file      = os.path.join(reports_dir, f"LeakLens_{timestamp}.db")
+    db_file   = os.path.join(reports_dir, f"LeakLens_{timestamp}.db")
     ckpt_file    = _ckpt_path(root, reports_dir)
 
     # ── SQLite setup ──────────────────────────────────────────────────────────
@@ -272,36 +268,10 @@ def scan_path(
     # ── Shared mutable state — ALL mutations guarded by _lock ─────────────────
     _lock  = threading.Lock()
     _state = {
-        "file_count":     0,
-        "hit_count":      0,
-        "last_flush_count": 0,
-        "last_flush_time":  time.time(),
-        "scan_start_time":  time.time(),
+        "file_count":      0,
+        "hit_count":       0,
+        "scan_start_time": time.time(),
     }
-    results: list = []
-
-    def _flush_partial() -> None:
-        """Atomically write a partial report snapshot (no lock held during I/O)."""
-        try:
-            with _lock:
-                snapshot = list(results)
-                fc = _state["file_count"]
-                hc = _state["hit_count"]
-                _state["last_flush_count"] = hc
-                _state["last_flush_time"]  = time.time()
-            tmp = partial_file + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as _f:
-                json.dump({
-                    "scanPath": root,
-                    "scanDate": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "scanned": fc,
-                    "hits":    hc,
-                    "partial": True,
-                    "findings": snapshot,
-                }, _f, indent=2)
-            os.replace(tmp, partial_file)
-        except OSError:
-            pass
 
     # ── Queues ────────────────────────────────────────────────────────────────
     _file_q:  queue.Queue = queue.Queue(maxsize=max(workers * 8, 64))
@@ -450,19 +420,12 @@ def scan_path(
                 _event_q.put({"type": "log", "message": f"[ERROR] {fpath}: {e}"})
 
             # Update shared counters exactly once per file
-            need_flush = False
             with _lock:
                 _state["file_count"] += 1
                 fc = _state["file_count"]
                 if finding is not None:
                     _state["hit_count"] += 1
                     hc = _state["hit_count"]
-                    results.append(finding)
-                    if (hc - _state["last_flush_count"] >= _FLUSH_EVERY_N or
-                            time.time() - _state["last_flush_time"] >= _FLUSH_EVERY_SECS):
-                        need_flush = True
-                        _state["last_flush_count"] = hc
-                        _state["last_flush_time"]  = time.time()
                 else:
                     hc = _state["hit_count"]
 
@@ -479,9 +442,6 @@ def scan_path(
                     "current": fpath,
                     "rate":    rate,
                 })
-
-            if need_flush:
-                _flush_partial()
 
         _event_q.put(("__done__",))
 
@@ -593,30 +553,9 @@ def scan_path(
     except Exception:
         pass
 
-    # ── Save final JSON report ────────────────────────────────────────────────
-    report = {
-        "scanPath": root,
-        "scanDate": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "scanned":  fc,
-        "hits":     hc,
-        "findings": results,
-    }
-    try:
-        with open(report_file, "w", encoding="utf-8") as f:
-            json.dump(report, f, indent=2)
-        try:
-            os.remove(partial_file)
-        except OSError:
-            pass
-        yield {"type": "log", "message": f"Report saved: {report_file}"}
-    except OSError as e:
-        yield {"type": "log", "message": f"Could not save report: {e}"}
-        report_file = ""
-
     yield {
-        "type":       "summary",
-        "scanned":    fc,
-        "hits":       hc,
-        "reportFile": report_file,
-        "scanId":     scan_id,
+        "type":    "summary",
+        "scanned": fc,
+        "hits":    hc,
+        "scanId":  scan_id,
     }

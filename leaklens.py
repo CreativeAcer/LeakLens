@@ -19,8 +19,7 @@ import threading
 
 __version__ = "1.1.0"
 
-from flask import Flask, Response, jsonify, request, send_from_directory
-from flask import stream_with_context
+from flask import Flask, Response, jsonify, request, send_from_directory, stream_with_context
 
 logging.basicConfig(
     level=logging.WARNING,
@@ -31,8 +30,6 @@ _log = logging.getLogger("leaklens")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
 REPORTS_DIR = os.path.join(BASE_DIR, "reports")
-
-_REPORTS_DIR_REAL = None  # lazily resolved on first request
 
 app = Flask(__name__, static_folder=FRONTEND_DIR, static_url_path="")
 
@@ -57,20 +54,6 @@ def _extract_smb_creds(data: dict):
         data.get("password") or None,
         data.get("domain") or None,
     )
-
-
-def _safe_report_path(name: str):
-    """
-    Resolve name relative to REPORTS_DIR and confirm it stays inside.
-    Returns the safe absolute path, or None if path traversal is detected.
-    """
-    global _REPORTS_DIR_REAL
-    if _REPORTS_DIR_REAL is None:
-        _REPORTS_DIR_REAL = os.path.realpath(REPORTS_DIR)
-    safe = os.path.realpath(os.path.join(REPORTS_DIR, name))
-    if not safe.startswith(_REPORTS_DIR_REAL + os.sep):
-        return None
-    return safe
 
 
 # ─── Static frontend ──────────────────────────────────────────────────────────
@@ -196,40 +179,6 @@ def list_shares():
         return jsonify({"error": "Could not enumerate shares."}), 500
 
 
-# ─── GET /api/reports ─────────────────────────────────────────────────────────
-
-@app.route("/api/reports", methods=["GET"])
-def list_reports():
-    if not os.path.isdir(REPORTS_DIR):
-        return jsonify([])
-    files = []
-    for fname in os.listdir(REPORTS_DIR):
-        if not fname.endswith(".json") or fname.endswith(".partial.json"):
-            continue
-        fpath = os.path.join(REPORTS_DIR, fname)
-        try:
-            st = os.stat(fpath)
-            files.append({
-                "name": fname,
-                "size": st.st_size,
-                "mtime": st.st_mtime,
-            })
-        except OSError:
-            pass
-    files.sort(key=lambda f: f["mtime"], reverse=True)
-    return jsonify(files)
-
-
-# ─── GET /api/reports/<name> ──────────────────────────────────────────────────
-
-@app.route("/api/reports/<path:name>", methods=["GET"])
-def get_report(name):
-    safe = _safe_report_path(name)
-    if safe is None or not os.path.isfile(safe):
-        return jsonify({"error": "Not found"}), 404
-    return send_from_directory(REPORTS_DIR, name)
-
-
 # ─── GET /api/scans ───────────────────────────────────────────────────────────
 
 @app.route("/api/scans", methods=["GET"])
@@ -327,6 +276,44 @@ def get_findings():
     except Exception:
         _log.exception("Failed to query findings for scan_id %s", scan_id)
         return jsonify({"error": "Failed to query findings."}), 500
+
+
+# ─── GET /api/scans/<scan_id>/export ─────────────────────────────────────────
+
+@app.route("/api/scans/<scan_id>/export", methods=["GET"])
+def export_scan(scan_id):
+    """Return all findings for a scan as a single JSON document."""
+    if not _VALID_SCAN_ID.match(scan_id):
+        return jsonify({"error": "Invalid scan_id"}), 400
+
+    db_path = os.path.join(REPORTS_DIR, f"LeakLens_{scan_id}.db")
+    if not os.path.isfile(db_path):
+        return jsonify({"error": "Scan not found"}), 404
+
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        scan_row = conn.execute("SELECT * FROM scans WHERE id = ?", (scan_id,)).fetchone()
+        if not scan_row:
+            conn.close()
+            return jsonify({"error": "Scan not found"}), 404
+        rows = conn.execute(
+            "SELECT data FROM findings WHERE scan_id = ? ORDER BY id",
+            (scan_id,),
+        ).fetchall()
+        findings = [json.loads(r["data"]) for r in rows]
+        conn.close()
+        return jsonify({
+            "scan_id":   scan_id,
+            "scan_path": scan_row["scan_path"],
+            "scan_date": scan_row["scan_date"],
+            "scanned":   scan_row["scanned"],
+            "hits":      scan_row["hits"],
+            "findings":  findings,
+        })
+    except Exception:
+        _log.exception("Failed to export scan %s", scan_id)
+        return jsonify({"error": "Failed to export scan."}), 500
 
 
 # ─── Entry point ──────────────────────────────────────────────────────────────

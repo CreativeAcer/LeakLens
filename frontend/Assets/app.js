@@ -43,7 +43,7 @@
   async function startScan() {
     const scanPath      = document.getElementById('scanPath').value.trim();
     const maxFileSizeMB = parseInt(document.getElementById('maxFileSizeMB').value) || 10;
-    const workers       = Math.max(1, Math.min(32, parseInt(document.getElementById('workerCount').value) || 8));
+    const workers       = Math.max(1, Math.min(16, parseInt(document.getElementById('workerCount').value) || 8));
     const resume        = document.getElementById('resumeScan')?.checked || false;
     const username      = document.getElementById('smbUsername')?.value.trim() || '';
     const password      = document.getElementById('smbPassword')?.value || '';
@@ -158,7 +158,7 @@
         break;
 
       case 'summary':
-        appendLog(`✔ Scan complete — ${d.scanned} files scanned, ${d.hits} findings. Report: ${d.reportFile}`, false);
+        appendLog(`✔ Scan complete — ${d.scanned} files scanned, ${d.hits} findings. Scan ID: ${d.scanId}`, false);
         break;
 
       case 'done':
@@ -475,18 +475,21 @@
     const container = document.getElementById('reportsContent');
     container.innerHTML = '<p style="color:var(--text-dim);padding:20px 0;">Loading…</p>';
     try {
-      const res = await fetch(`${API}/reports`);
-      const reports = await res.json();
-      if (!Array.isArray(reports) || reports.length === 0) {
+      const res = await fetch(`${API}/scans`);
+      const scans = await res.json();
+      if (!Array.isArray(scans) || scans.length === 0) {
         container.innerHTML = '<div class="empty-state"><div class="icon">📋</div><p>No reports yet. Run a scan to generate a report.</p></div>';
         return;
       }
-      container.innerHTML = reports.map(r => {
-        const date   = new Date(r.mtime * 1000).toLocaleString();
-        const sizeKB = (r.size / 1024).toFixed(1);
-        return `<div class="report-row" onclick="openReport('${escHtml(r.name)}')">
-          <span class="report-name">${escHtml(r.name)}</span>
-          <span class="report-meta">${sizeKB} KB</span>
+      container.innerHTML = scans.map(s => {
+        const label = s.scan_path || s.id;
+        const date  = s.scan_date  || '';
+        const hits  = s.hits  != null ? `${s.hits} findings`  : '';
+        const files = s.scanned != null ? `${s.scanned} files` : '';
+        return `<div class="report-row" onclick="openReport('${escHtml(s.id)}')">
+          <span class="report-name">${escHtml(label)}</span>
+          <span class="report-meta">${escHtml(files)}</span>
+          <span class="report-meta">${escHtml(hits)}</span>
           <span class="report-meta">${escHtml(date)}</span>
         </div>`;
       }).join('');
@@ -495,9 +498,9 @@
     }
   }
 
-  async function openReport(name) {
+  async function openReport(scanId) {
     try {
-      const res = await fetch(`${API}/reports/${encodeURIComponent(name)}`);
+      const res = await fetch(`${API}/scans/${encodeURIComponent(scanId)}/export`);
       if (!res.ok) { alert('Could not load report.'); return; }
       const report = await res.json();
 
@@ -515,7 +518,7 @@
       updateRiskBars();
       switchTab('findings');
       renderTable();
-      appendLog(`Loaded report: ${name} — ${findings.length} findings`, false);
+      appendLog(`Loaded scan: ${report.scan_path || scanId} — ${findings.length} findings`, false);
     } catch (e) {
       alert('Could not load report: ' + e.message);
     }
