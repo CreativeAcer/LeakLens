@@ -30,7 +30,7 @@ CONTENT_PATTERNS = [
         "id": "ntlm_hash",
         "name": "NTLM Hash",
         "regex": r'\b[a-fA-F0-9]{32}:[a-fA-F0-9]{32}\b',
-        "confidence": 7,
+        "confidence": 8,
         "risk": "HIGH",
     },
     {
@@ -65,7 +65,7 @@ CONTENT_PATTERNS = [
         "id": "bcrypt_hash",
         "name": "Bcrypt Hash",
         "regex": r'\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}',
-        "confidence": 7,
+        "confidence": 8,
         "risk": "HIGH",
     },
     {
@@ -111,7 +111,7 @@ CONTENT_PATTERNS = [
         "id": "net_use_credential",
         "name": "Net Use Credential",
         "regex": r'(?i)net\s+use.*\/user:\S+',
-        "confidence": 7,
+        "confidence": 8,
         "risk": "HIGH",
     },
     {
@@ -119,7 +119,7 @@ CONTENT_PATTERNS = [
         "name": "PowerShell SecureString",
         # Only fires when a string literal is hardcoded — not on legitimate Read-Host or pipeline usage
         "regex": r'(?i)ConvertTo-SecureString\s+["\'][^"\']{4,}["\']',
-        "confidence": 7,
+        "confidence": 8,
         "risk": "HIGH",
     },
     {
@@ -155,14 +155,15 @@ CONTENT_PATTERNS = [
         "id": "azure_client_secret",
         "name": "Azure Client Secret",
         "regex": r'(?i)(client[_-]?secret|clientsecret)\s*[=:]\s*["\']?[A-Za-z0-9\-._~]{34,40}["\']?',
-        "confidence": 7,
+        "confidence": 8,
         "risk": "HIGH",
     },
     {
         "id": "azure_storage_key",
         "name": "Azure Storage Account Key",
-        # Storage account keys are 88-char base64 strings ending in ==
-        "regex": r'[A-Za-z0-9+/]{86}==',
+        # Storage account keys are 88-char base64 strings ending in ==.
+        # Keyword anchor required — bare base64 matches every TLS cert and JWT payload.
+        "regex": r'(?i)(AccountKey|StorageKey|storage[_-]?account[_-]?key)\s*[=:]\s*[A-Za-z0-9+/]{86}==',
         "confidence": 8,
         "risk": "HIGH",
     },
@@ -261,6 +262,14 @@ DOCS_DIRS = {
 # Pattern IDs that are hash-only (low signal on their own — likely checksums, not credentials)
 # NTLM hashes are always credential hashes so they are intentionally excluded here
 HASH_PATTERN_IDS = {"md5_hash", "sha1_hash", "sha256_hash", "sha512_hash"}
+
+# Filenames to skip content scanning — lockfiles and build artifacts are full of
+# hashes and base64 strings that produce massive hash-pattern noise with zero signal.
+EXCLUDED_FILENAMES = {
+    "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+    "gemfile.lock", "pipfile.lock", "poetry.lock",
+    "composer.lock", "cargo.lock", "packages.lock.json", "paket.lock",
+}
 
 # Pre-compiled patterns — use these in the engine to avoid re-compiling on every file.
 # Inline flags in each regex string ((?i), (?ix), etc.) are preserved by re.compile().

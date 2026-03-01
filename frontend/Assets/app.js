@@ -327,7 +327,7 @@
   }
 
   function appendRow(f, tbody) {
-    const list = f.findingsList || (f.findings ? f.findings.split(' | ') : []);
+    const list = f.findingsList || [];
     const tags = list.map(x => `<span class="finding-tag">${escHtml(x)}</span>`).join('');
     const conf = f.confidence || 0;
     const confDots = Array.from({length: 10}, (_, i) =>
@@ -446,7 +446,7 @@
   }
 
   function getRecommendation(f) {
-    const p = f.findings || '';
+    const p = (f.findingsList || []).join(' | ');
     const isSmb = !!f.smbShare;
     const share = isSmb ? ` on share <strong>${escHtml(f.smbShare)}</strong>` : '';
     const smbSuffix = isSmb
