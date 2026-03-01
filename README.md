@@ -31,9 +31,10 @@ Scans Windows file shares (and local paths) for exposed credentials:
 ## Requirements
 
 - Python 3.11+
-- Dependencies install automatically on first run:
-  - `flask>=3.0`
-  - `smbprotocol>=1.13`
+- Dependencies (pinned):
+  - `flask==3.1.3`
+  - `smbprotocol==1.16.0`
+  - `PyYAML==6.0.2`
 
 ---
 
@@ -57,6 +58,9 @@ python3 leaklens.py
 
 Opens at **http://localhost:3000**.
 
+The server binds to `127.0.0.1:3000` by default.
+Override with environment variables: `LEAKLENS_HOST` and `LEAKLENS_PORT`.
+
 ---
 
 ## Scanning a file share
@@ -67,7 +71,7 @@ Opens at **http://localhost:3000**.
    - Or enter domain credentials for authenticated scans
 3. Click **Discover Shares** to enumerate all visible shares on a server
 4. Set the max file size to scan (default: 10 MB)
-5. Set the number of **Worker Threads** (1–32, default 8) to control scan parallelism
+5. Set the number of **Worker Threads** (1–16, default 8) to control scan parallelism
 6. Enable **Resume** to continue a previously interrupted scan from its checkpoint
 7. Click **Start Scan**
 8. Findings stream in as they are found — click any row to see the **matched line**, file metadata, and remediation advice
@@ -83,20 +87,20 @@ Opens at **http://localhost:3000**.
 |---|---|---|
 | Plaintext Password | `password=`, `"password": "..."`, `DB_PASSWORD=` | 8/10 |
 | Connection String | Embedded passwords in connection strings | 8/10 |
-| NTLM / LM Hash | `lm_hash:ntlm_hash` pairs | 7/10 |
-| Bcrypt Hash | `$2a$`, `$2b$`, `$2y$` | 7/10 |
+| NTLM / LM Hash | `lm_hash:ntlm_hash` pairs | 8/10 |
+| Bcrypt Hash | `$2a$`, `$2b$`, `$2y$` | 8/10 |
 | Base64 Credential | Base64 values next to credential keywords | 5/10 |
 | AWS Access Key | `AKIA…` | 9/10 |
 | GitHub / GitLab PAT | `ghp_…`, `gho_…`, `glpat-…` | 10/10 |
 | Stripe API Key | `sk_live_…`, `sk_test_…` | 10/10 |
 | Slack Token | `xoxb-…`, `xoxp-…` | 10/10 |
 | SendGrid API Key | `SG.xxxx.xxxx` | 10/10 |
-| Azure Client Secret / Storage Key | Azure credential formats | 7–8/10 |
+| Azure Client Secret / Storage Key | Azure credential formats | 8/10 |
 | DPAPI Encrypted Blob | DPAPI blob headers (base64 or hex) | 8/10 |
 | API Key / Bearer Token | Key assignments and `Bearer` tokens | 6/10 |
 | Private Key Header | `-----BEGIN … PRIVATE KEY-----` | 10/10 |
-| Net Use Credential | `net use /user:` commands | 7/10 |
-| PowerShell SecureString | Hardcoded `ConvertTo-SecureString` literals | 7/10 |
+| Net Use Credential | `net use /user:` commands | 8/10 |
+| PowerShell SecureString | Hardcoded `ConvertTo-SecureString` literals | 8/10 |
 | PowerShell PSCredential | Hardcoded `PSCredential` objects | 6/10 |
 | SQL sa Password | `sa password =` | 8/10 |
 | MD5 / SHA1 / SHA256 / SHA512 | Hash strings by length | 3–4/10 |
@@ -116,7 +120,7 @@ Every finding gets a score from 1–10 based on how certain the match is:
 | Score | Meaning |
 |---|---|
 | 9–10 | Near-certain — private key, AWS access key |
-| 7–8 | High confidence — plaintext password, NTLM hash, connection string |
+| 7–8 | High confidence — plaintext password, NTLM hash, connection string, SecureString |
 | 5–6 | Moderate — API key pattern, PSCredential, suspicious filename |
 | 3–4 | Low signal — hash strings that could be checksums rather than credentials |
 
@@ -129,6 +133,7 @@ Confidence is reduced automatically for files in `docs/`, `examples/`, `test/`, 
 - Common placeholders (`changeme`, `example`, `${password}`, `***`, etc.) are excluded from password matches
 - Docs and example directories reduce confidence by 3 points automatically
 - Hash-only findings are demoted to LOW with the note: *"Hash strings detected — verify these are credential hashes and not integrity checksums."*
+- Lockfiles (`package-lock.json`, `yarn.lock`, `poetry.lock`, etc.) are skipped entirely — they are dense with hash strings that would otherwise flood results
 
 ---
 
@@ -247,7 +252,7 @@ The detail drawer also surfaces this information alongside tailored remediation 
 |---|---|---|---|
 | `scanPath` | string | — | UNC or local path to scan (required) |
 | `maxFileSizeMB` | int | 10 | Skip files larger than this |
-| `workers` | int | 8 | Number of parallel worker threads (1–32) |
+| `workers` | int | 8 | Number of parallel worker threads (1–16) |
 | `resume` | bool | false | Resume from the last checkpoint for this path |
 | `username` | string | — | SMB username |
 | `password` | string | — | SMB password |
@@ -279,7 +284,26 @@ A Samba container pre-loaded with intentionally dirty files is included so you c
 testserver\start-testserver.bat
 ```
 
-**Scan it** — point LeakLens at `\\127.0.0.1\testshare` with blank credentials (guest access). No mount required.
+The container runs Samba on port **4445**. Mount the share locally, then point LeakLens at the mount path.
+
+**Linux:**
+```bash
+sudo mkdir -p /mnt/testshare
+sudo mount -t cifs //127.0.0.1/testshare /mnt/testshare -o port=4445,guest,vers=2.0
+# Scan: /mnt/testshare
+```
+
+**macOS:**
+```
+open 'smb://127.0.0.1:4445/testshare'
+# Scan: /Volumes/testshare (or wherever Finder mounts it)
+```
+
+**Windows:**
+```cmd
+net use Z: \\127.0.0.1\testshare "" /user:guest /port:4445
+:: Scan: Z:\
+```
 
 **Stop it:**
 
@@ -287,6 +311,8 @@ testserver\start-testserver.bat
 ./testserver/stop-testserver.sh   # Linux / macOS
 testserver\stop-testserver.bat    # Windows
 ```
+
+See [USAGE.md](USAGE.md) for the complete test server walkthrough.
 
 Expected findings across the 8 test files:
 
@@ -303,22 +329,46 @@ Expected findings across the 8 test files:
 
 ---
 
+## Running the tests
+
+Install dev dependencies, then run pytest:
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest tests/ -v
+```
+
+149 tests across three modules: pattern regexes, engine helpers, and API endpoints.
+See [USAGE.md](USAGE.md) for a full walkthrough including the live test server.
+
+---
+
 ## Project structure
 
 ```
 LeakLens/
-├── leaklens.py            # Entry point — Flask server + all API routes
+├── leaklens.py                 # Entry point — Flask server + all API routes
+├── requirements.txt            # Pinned runtime dependencies
+├── requirements-dev.txt        # Adds pytest for development
+├── start.bat / start.sh        # Launchers
 ├── scanner/
-│   ├── engine.py          # Scanning logic — local and SMB paths, SQLite, checkpoints
-│   ├── patterns.py        # Detection rules with confidence scores (pre-compiled)
-│   └── smb.py             # SMB/UNC helpers (smbprotocol)
+│   ├── engine.py               # Scan orchestrator — walk, workers, SQLite, SSE
+│   ├── content.py              # Detection helpers, scan_content(), build_finding()
+│   ├── patterns.py             # 25 detection rules (pre-compiled)
+│   ├── smb.py                  # smbprotocol helpers
+│   ├── suppress.py             # .leaklensignore parser
+│   └── checkpoint.py           # Resume checkpoint helpers
 ├── frontend/
-│   └── index.html         # Browser UI (SSE client, virtual scroll, filters)
-├── requirements.txt
-├── start.bat              # Windows launcher
-├── start.sh               # Linux/macOS launcher
-├── reports/               # SQLite databases + JSON reports (auto-created)
-└── testserver/            # Samba container for testing
+│   ├── index.html              # Browser UI shell
+│   └── Assets/
+│       ├── app.js              # SSE client, virtual scroll, filters
+│       └── styles.css
+├── tests/
+│   ├── test_patterns.py        # Positive/negative tests for all 25 patterns
+│   ├── test_engine.py          # scan_content, build_finding, suppression helpers
+│   └── test_api.py             # Flask endpoint tests
+├── reports/                    # Auto-created: SQLite + JSON per scan
+└── testserver/                 # Samba container for testing
 ```
 
 ---
