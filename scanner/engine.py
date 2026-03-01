@@ -18,6 +18,7 @@ from scanner.patterns import (
     FLAGGED_NAMES,
     FLAGGED_EXACT_NAMES,
     TARGET_EXTENSIONS,
+    EXCLUDED_FILENAMES,
 )
 from scanner.content import scan_content, build_finding
 from scanner.suppress import load_suppressions, is_suppressed
@@ -35,7 +36,7 @@ from scanner.smb import (
 
 # ─── Local path scanner ───────────────────────────────────────────────────────
 
-def _check_local_file(path: str, max_size: int) -> dict | None:
+def _check_local_file(path: str, max_size: int):
     """Analyse a single local file. Returns a partial finding dict or None."""
     try:
         stat = os.stat(path)
@@ -45,6 +46,9 @@ def _check_local_file(path: str, max_size: int) -> dict | None:
     ext = os.path.splitext(path)[1].lower()
     name = os.path.basename(path).lower()
     name_base = os.path.splitext(name)[0]
+
+    if name in EXCLUDED_FILENAMES:
+        return None
 
     binary_risk = ext in FLAGGED_EXTENSIONS
     risky_name = (
@@ -301,7 +305,7 @@ def scan_path(
 
     # ── Queues ────────────────────────────────────────────────────────────────
     _file_q:  queue.Queue = queue.Queue(maxsize=max(workers * 8, 64))
-    _event_q: queue.Queue = queue.Queue()
+    _event_q: queue.Queue = queue.Queue(maxsize=max(workers * 32, 512))
 
     # ── Per-file analysis ─────────────────────────────────────────────────────
     def _analyse_item(item: tuple) -> tuple:
@@ -321,6 +325,8 @@ def scan_path(
 
         # "smb_file"
         _, smb_path, fname, stat, _srv, _shr = item
+        if fname.lower() in EXCLUDED_FILENAMES:
+            return None, smb_path
         ext       = os.path.splitext(fname)[1].lower()
         name_base = os.path.splitext(fname.lower())[0]
         binary_risk = ext in FLAGGED_EXTENSIONS

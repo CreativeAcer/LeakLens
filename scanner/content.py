@@ -167,7 +167,6 @@ def build_finding(
         "owner": owner,
         "riskyFilename": risky_name,
         "hashOnly": hash_only,
-        "findings": " | ".join(f["name"] for f in all_findings),
         "findingsList": [f["name"] for f in all_findings],
         "findingsDetail": all_findings,
     }

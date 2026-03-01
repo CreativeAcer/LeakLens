@@ -6,12 +6,14 @@ Single entry point: HTTP server + streaming scanner.
 Usage:
     python leaklens.py
 
-Opens at http://localhost:3000
+Opens at http://localhost:3000 (or LEAKLENS_PORT / LEAKLENS_HOST env vars)
 """
 
 import json
+import logging
 import os
 import queue
+import re
 import sqlite3
 import threading
 
@@ -20,9 +22,17 @@ __version__ = "1.1.0"
 from flask import Flask, Response, jsonify, request, send_from_directory
 from flask import stream_with_context
 
+logging.basicConfig(
+    level=logging.WARNING,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+_log = logging.getLogger("leaklens")
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
 REPORTS_DIR = os.path.join(BASE_DIR, "reports")
+
+_REPORTS_DIR_REAL = None  # lazily resolved on first request
 
 app = Flask(__name__, static_folder=FRONTEND_DIR, static_url_path="")
 
@@ -33,6 +43,34 @@ _active = {
     "running": False,
     "stop_event": threading.Event(),
 }
+
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+
+_VALID_SCAN_ID = re.compile(r'^[\w-]+$')
+_VALID_HOST    = re.compile(r'^[a-zA-Z0-9._\-]{1,255}$')
+
+
+def _extract_smb_creds(data: dict):
+    """Return (username, password, domain) from a request data dict."""
+    return (
+        data.get("username") or None,
+        data.get("password") or None,
+        data.get("domain") or None,
+    )
+
+
+def _safe_report_path(name: str):
+    """
+    Resolve name relative to REPORTS_DIR and confirm it stays inside.
+    Returns the safe absolute path, or None if path traversal is detected.
+    """
+    global _REPORTS_DIR_REAL
+    if _REPORTS_DIR_REAL is None:
+        _REPORTS_DIR_REAL = os.path.realpath(REPORTS_DIR)
+    safe = os.path.realpath(os.path.join(REPORTS_DIR, name))
+    if not safe.startswith(_REPORTS_DIR_REAL + os.sep):
+        return None
+    return safe
 
 
 # ─── Static frontend ──────────────────────────────────────────────────────────
@@ -53,11 +91,9 @@ def scan():
         data = request.get_json(silent=True) or {}
         scan_path = data.get("scanPath", "").strip()
         max_file_size_mb = int(data.get("maxFileSizeMB", 10))
-        workers = max(1, min(32, int(data.get("workers", 8))))
+        workers = max(1, min(16, int(data.get("workers", 8))))
         resume = bool(data.get("resume", False))
-        username = data.get("username") or None
-        password = data.get("password") or None
-        domain = data.get("domain") or None
+        username, password, domain = _extract_smb_creds(data)
 
         if not scan_path:
             return jsonify({"error": "scanPath is required."}), 400
@@ -86,8 +122,9 @@ def scan():
                     resume=resume,
                 ):
                     result_queue.put(event)
-            except Exception as exc:
-                result_queue.put({"type": "error", "message": str(exc)})
+            except Exception:
+                _log.exception("Unhandled error in scan thread")
+                result_queue.put({"type": "error", "message": "Scan failed due to an internal error."})
             finally:
                 result_queue.put(None)  # sentinel
 
@@ -143,10 +180,10 @@ def list_shares():
     host = data.get("host", "").strip()
     if not host:
         return jsonify({"error": "host is required."}), 400
+    if not _VALID_HOST.match(host):
+        return jsonify({"error": "Invalid host format."}), 400
 
-    username = data.get("username") or None
-    password = data.get("password") or None
-    domain = data.get("domain") or None
+    username, password, domain = _extract_smb_creds(data)
 
     try:
         from scanner.smb import list_shares as smb_list_shares
@@ -154,8 +191,9 @@ def list_shares():
         return jsonify({"shares": shares})
     except RuntimeError as e:
         return jsonify({"error": str(e)}), 503
-    except Exception as e:
-        return jsonify({"error": f"Could not enumerate shares: {e}"}), 500
+    except Exception:
+        _log.exception("Share enumeration failed for host %s", host)
+        return jsonify({"error": "Could not enumerate shares."}), 500
 
 
 # ─── GET /api/reports ─────────────────────────────────────────────────────────
@@ -186,8 +224,8 @@ def list_reports():
 
 @app.route("/api/reports/<path:name>", methods=["GET"])
 def get_report(name):
-    fpath = os.path.join(REPORTS_DIR, name)
-    if not os.path.isfile(fpath):
+    safe = _safe_report_path(name)
+    if safe is None or not os.path.isfile(safe):
         return jsonify({"error": "Not found"}), 404
     return send_from_directory(REPORTS_DIR, name)
 
@@ -211,8 +249,8 @@ def list_scans():
             if row:
                 scans.append(dict(row))
             conn.close()
-        except Exception:
-            pass
+        except Exception as e:
+            _log.debug("Could not read scan DB %s: %s", db_path, e)
     scans.sort(key=lambda s: s.get("started_at", 0), reverse=True)
     return jsonify(scans)
 
@@ -231,9 +269,11 @@ def get_findings():
       risk      — HIGH | MEDIUM | LOW | ALL (default ALL)
       search    — substring filter on file_name or full_path
     """
-    scan_id  = request.args.get("scan_id", "").strip()
+    scan_id = request.args.get("scan_id", "").strip()
     if not scan_id:
         return jsonify({"error": "scan_id is required"}), 400
+    if not _VALID_SCAN_ID.match(scan_id):
+        return jsonify({"error": "Invalid scan_id"}), 400
 
     try:
         page     = max(0, int(request.args.get("page", 0)))
@@ -284,13 +324,16 @@ def get_findings():
             "per_page": per_page,
             "findings": findings,
         })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except Exception:
+        _log.exception("Failed to query findings for scan_id %s", scan_id)
+        return jsonify({"error": "Failed to query findings."}), 500
 
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    _host = os.environ.get("LEAKLENS_HOST", "127.0.0.1")
+    _port = int(os.environ.get("LEAKLENS_PORT", 3000))
     os.makedirs(REPORTS_DIR, exist_ok=True)
-    print("\n  LeakLens running at http://localhost:3000\n")
-    app.run(host="127.0.0.1", port=3000, threaded=True, debug=False)
+    print(f"\n  LeakLens running at http://{_host}:{_port}\n")
+    app.run(host=_host, port=_port, threaded=True, debug=False)

@@ -10,7 +10,7 @@ import os
 
 def _ckpt_path(root: str, reports_dir: str) -> str:
     """Return the checkpoint file path for a given scan root."""
-    root_hash = hashlib.md5(root.encode("utf-8", "replace")).hexdigest()[:12]
+    root_hash = hashlib.sha256(root.encode("utf-8", "replace")).hexdigest()[:16]
     return os.path.join(reports_dir, f"checkpoint_{root_hash}.json")
 
 
