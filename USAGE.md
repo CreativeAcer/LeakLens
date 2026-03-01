@@ -77,7 +77,7 @@ Findings stream in as they are detected. The progress bar shows files/second thr
 
 ### Reports tab
 
-Every completed scan is saved as a timestamped SQLite database and JSON file in `reports/`. The **Reports** tab lists all saved scans — click any entry to reload its findings into the main view with full filtering, search, and the detail drawer.
+Every completed scan is saved as a timestamped SQLite database in `reports/`. The **Reports** tab lists all saved scans — click any entry to reload its findings into the main view with full filtering, search, and the detail drawer.
 
 ---
 

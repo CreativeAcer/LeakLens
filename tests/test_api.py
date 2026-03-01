@@ -26,7 +26,6 @@ def client():
 def tmp_reports(monkeypatch, tmp_path):
     """Redirect REPORTS_DIR to a temporary directory for isolation."""
     monkeypatch.setattr(leaklens, "REPORTS_DIR", str(tmp_path))
-    monkeypatch.setattr(leaklens, "_REPORTS_DIR_REAL", None)
     return tmp_path
 
 
@@ -73,40 +72,6 @@ def test_shares_invalid_host_uri(client):
     assert r.status_code == 400
 
 
-# ─── GET /api/reports ─────────────────────────────────────────────────────────
-
-def test_list_reports_empty(client, tmp_reports):
-    r = client.get("/api/reports")
-    assert r.status_code == 200
-    assert json.loads(r.data) == []
-
-
-def test_list_reports_excludes_partial(client, tmp_reports):
-    (tmp_reports / "LeakLens_20240101_120000.json").write_text("{}")
-    (tmp_reports / "LeakLens_20240101_120000.partial.json").write_text("{}")
-    r = client.get("/api/reports")
-    names = [f["name"] for f in json.loads(r.data)]
-    assert "LeakLens_20240101_120000.json" in names
-    assert "LeakLens_20240101_120000.partial.json" not in names
-
-
-# ─── GET /api/reports/<name> — path traversal ────────────────────────────────
-
-def test_get_report_not_found(client, tmp_reports):
-    r = client.get("/api/reports/nonexistent.json")
-    assert r.status_code == 404
-
-
-def test_get_report_path_traversal_blocked(client, tmp_reports):
-    r = client.get("/api/reports/../leaklens.py")
-    assert r.status_code == 404
-
-
-def test_get_report_double_dot_blocked(client, tmp_reports):
-    r = client.get("/api/reports/../../etc/passwd")
-    assert r.status_code == 404
-
-
 # ─── GET /api/scans ───────────────────────────────────────────────────────────
 
 def test_list_scans_empty(client, tmp_reports):
@@ -140,6 +105,57 @@ def test_findings_valid_scan_id_not_found(client, tmp_reports):
 def test_findings_invalid_page_type(client, tmp_reports):
     r = client.get("/api/findings?scan_id=20240101_120000&page=abc")
     assert r.status_code == 400
+
+
+# ─── GET /api/scans/<scan_id>/export ─────────────────────────────────────────
+
+def test_export_scan_invalid_id(client):
+    r = client.get("/api/scans/../etc/passwd/export")
+    assert r.status_code == 404   # Flask 404 before our route fires on path mismatch
+
+
+def test_export_scan_bad_chars(client):
+    r = client.get("/api/scans/bad;id/export")
+    assert r.status_code == 400
+
+
+def test_export_scan_not_found(client, tmp_reports):
+    r = client.get("/api/scans/20240101_120000/export")
+    assert r.status_code == 404
+
+
+def test_export_scan_returns_findings(client, tmp_reports):
+    """Create a minimal SQLite DB and verify the export endpoint returns it."""
+    import sqlite3 as _sq
+    scan_id = "20240101_120000"
+    db_path = str(tmp_reports / f"LeakLens_{scan_id}.db")
+    conn = _sq.connect(db_path)
+    conn.executescript("""
+        CREATE TABLE scans (id TEXT PRIMARY KEY, scan_path TEXT, scan_date TEXT,
+                            scanned INTEGER, hits INTEGER, completed INTEGER, started_at INTEGER);
+        CREATE TABLE findings (id INTEGER PRIMARY KEY AUTOINCREMENT, scan_id TEXT,
+                               risk_level TEXT, confidence INTEGER,
+                               file_name TEXT, full_path TEXT, data TEXT);
+    """)
+    conn.execute(
+        "INSERT INTO scans VALUES (?,?,?,?,?,?,?)",
+        (scan_id, "/tmp/test", "2024-01-01 12:00:00", 5, 1, 1, 0),
+    )
+    conn.execute(
+        "INSERT INTO findings (scan_id, risk_level, confidence, file_name, full_path, data) "
+        "VALUES (?,?,?,?,?,?)",
+        (scan_id, "HIGH", 9, "id_rsa", "/tmp/test/id_rsa", json.dumps({"riskLevel": "HIGH"})),
+    )
+    conn.commit()
+    conn.close()
+
+    r = client.get(f"/api/scans/{scan_id}/export")
+    assert r.status_code == 200
+    data = json.loads(r.data)
+    assert data["scan_id"] == scan_id
+    assert data["scanned"] == 5
+    assert len(data["findings"]) == 1
+    assert data["findings"][0]["riskLevel"] == "HIGH"
 
 
 # ─── POST /api/scan — basic validation ───────────────────────────────────────
