@@ -751,6 +751,17 @@
     }
     .report-name { flex: 1; color: var(--text-bright); word-break: break-all; }
     .report-meta { color: var(--text-dim); font-size: 11px; white-space: nowrap; }
+    .report-dl {
+      padding: 3px 10px;
+      border: 1px solid var(--border2);
+      border-radius: 4px;
+      color: var(--text-dim);
+      font-size: 11px;
+      white-space: nowrap;
+      text-decoration: none;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .report-dl:hover { color: var(--accent); border-color: var(--accent); }
     .reports-toolbar {
       display: flex;
       align-items: center;

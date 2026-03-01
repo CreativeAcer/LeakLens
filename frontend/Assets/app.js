@@ -491,6 +491,10 @@
           <span class="report-meta">${escHtml(files)}</span>
           <span class="report-meta">${escHtml(hits)}</span>
           <span class="report-meta">${escHtml(date)}</span>
+          <a class="report-dl"
+             href="${API}/scans/${encodeURIComponent(s.id)}/export"
+             download="LeakLens_${escHtml(s.id)}.json"
+             onclick="event.stopPropagation()">↓ JSON</a>
         </div>`;
       }).join('');
     } catch (e) {
