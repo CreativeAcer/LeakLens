@@ -70,13 +70,14 @@ Born from a pentest finding: a domain admin password sitting in a plaintext `.ps
 
 LeakLens complements tools like truffleHog and gitleaks by focusing on a different attack surface: file shares and internal paths.
 
-| Tool       | Primary focus            | Native SMB/UNC scanning | Filesystem paths | Git history | Live UI streaming | Resume scans |
-|------------|--------------------------|-------------------------|------------------|-------------|-------------------|--------------|
-| LeakLens   | File shares, local paths | ✅ Yes                  | ✅ Yes           | ❌ No       | ✅ Yes            | ✅ Yes       |
-| truffleHog | Git, CI, artifacts       | ❌ No (mount required)  | ⚠️ Yes           | ✅ Yes      | ❌ No             | ❌ No        |
-| gitleaks   | Git repos & commits      | ❌ No                   | ❌ No            | ✅ Yes      | ❌ No             | ❌ No        |
+| Tool       | Primary focus                    | Native SMB (no mount)           | Share enumeration | Git history | Live UI streaming | Resume scans |
+|------------|----------------------------------|---------------------------------|-------------------|-------------|-------------------|--------------|
+| LeakLens   | File shares, local paths         | ✅ Yes                          | ✅ Yes            | ❌ No       | ✅ Yes            | ✅ Yes       |
+| truffleHog | Git, CI, cloud, filesystem       | ⚠️ No (os mounted paths only)   | ❌ No             | ✅ Yes      | ❌ No             | ❌ No        |
+| gitleaks   | Git repos & commits              | ❌ No                           | ❌ No             | ✅ Yes      | ❌ No             | ❌ No        |
 
 LeakLens is not a replacement for repository secret scanners, it fills the gap where credentials leak into shared folders, scripts, and internal file servers.
+The biggest difference being Native SMB/UNC (and ease of use - personal taste)
 
 ---
 
