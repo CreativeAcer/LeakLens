@@ -1,5 +1,5 @@
 <p align="center">
-  <b>LeakLens – Credential Exposure Scanner for File Shares</b>
+  <b>LeakLens – Credential Exposure Scanner for File Shares</b> 
 </p>
 
 <p align="center">
@@ -33,6 +33,12 @@
   <img src="https://img.shields.io/badge/Open%20Source-❤-success?style=for-the-badge" />
   <img src="https://img.shields.io/badge/Security-Credential_Scanner-critical?style=for-the-badge" />
   <img src="https://img.shields.io/badge/Use%20Case-File_Share_Auditing-informational?style=for-the-badge" />
+</p>
+
+<p align="center">
+  <a href="https://github.com/CreativeAcer/LeakLens/actions/workflows/ci.yml">
+    <img src="https://github.com/CreativeAcer/LeakLens/actions/workflows/ci.yml/badge.svg?style=for-the-badge" />
+  </a>
 </p>
 
 ![LeakLens Banner](Images/leaklens-banner.svg)
