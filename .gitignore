@@ -6,6 +6,8 @@ __pycache__/
 venv/
 env/
 .pytest_cache/
+Lib/
+Scripts/
 
 # Node (legacy backend — kept for reference)
 node_modules/
