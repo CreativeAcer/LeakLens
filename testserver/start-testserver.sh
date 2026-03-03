@@ -39,7 +39,7 @@ echo ""
 echo "  [*] Starting test file server..."
 $RUNTIME run -d \
   --name leaklens-testserver \
-  -p 4445:4445 \
+  -p 4445:445 \
   leaklens-testserver
 
 echo ""
@@ -49,8 +49,9 @@ echo ""
 echo "   Mount the share, then point LeakLens at the mount path:"
 echo ""
 echo "   Linux:"
+echo "     sudo mkdir -p /mnt/testshare"
 echo "     sudo mount -t cifs //127.0.0.1/testshare /mnt/testshare \\"
-echo "       -o port=4445,guest,vers=2.0"
+echo "       -o port=4445,guest,vers=3.0"
 echo "     Then scan: /mnt/testshare"
 echo ""
 echo "   macOS:"

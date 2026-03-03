@@ -132,20 +132,31 @@ Opens at **http://localhost:3000**.
 The server binds to `127.0.0.1:3000` by default.
 Override with environment variables: `LEAKLENS_HOST` and `LEAKLENS_PORT`.
 
+For a full walkthrough of every feature — SMB share browsing, confidence scoring, custom patterns, suppression, webhooks, and CLI usage — see **[USAGE.md](USAGE.md)**.
+
 ---
 
 ## Scanning a file share
 
-1. Enter a UNC path — `\\server\share` — or a local path
-2. For UNC paths the **SMB Credentials** panel appears automatically
-   - Leave blank to try guest/anonymous access first
-   - Or enter domain credentials for authenticated scans
-3. Click **Discover Shares** to enumerate all visible shares on a server
-4. Set the max file size to scan (default: 10 MB)
-5. Set the number of **Worker Threads** (1–16, default 8) to control scan parallelism
-6. Enable **Resume** to continue a previously interrupted scan from its checkpoint
-7. Click **Start Scan**
-8. Findings stream in as they are found — click any row to see the **matched line**, file metadata, and remediation advice
+### Option A — Enter a UNC path directly
+
+Type a UNC path such as `\\server\share` into the **Path** field and click **Start Scan**.
+Credentials are read from the **SMB: Browse Shares & Credentials** modal if you need them.
+
+### Option B — Browse and select a share (recommended for SMB)
+
+1. Click **⬡ SMB: Browse Shares & Credentials** in the Scan Configuration panel
+2. Enter the server address in the **Server / Host** field
+   - Standard port: `192.168.1.10`
+   - Non-standard port: `192.168.1.10:4445` (or `hostname:port`)
+3. Optionally enter **Username**, **Password**, and **Domain** — leave blank for guest/anonymous access
+4. Click **⬡ Discover Shares** — all visible shares appear in a list (admin shares are labelled separately)
+5. Click any share to auto-populate the **Path** field and close the modal
+6. Back in the main panel:
+   - Set **Max Size** (default 10 MB) and **Worker Threads** (default 8)
+   - Enable **Resume** to continue an interrupted scan from its checkpoint
+7. Click **Start Scan** — findings stream in as they are found
+8. Click any row to see the **exact matched line**, file metadata, and remediation advice
 9. Open the **Reports** tab at any time to reload a previous scan
 
 ---
@@ -327,6 +338,7 @@ The detail drawer also surfaces this information alongside tailored remediation 
 | `username` | string | — | SMB username |
 | `password` | string | — | SMB password |
 | `domain` | string | — | SMB domain |
+| `smbPort` | int | 445 | SMB port (use when the server listens on a non-standard port) |
 
 ### GET /api/findings — query parameters
 
@@ -354,25 +366,21 @@ A Samba container pre-loaded with intentionally dirty files is included so you c
 testserver\start-testserver.bat
 ```
 
-The container runs Samba on port **4445**. Mount the share locally, then point LeakLens at the mount path.
+The container runs Samba on port **4445**. No mounting is needed — LeakLens connects directly over SMB.
 
-**Linux:**
+**Scan it with the UI:**
+
+1. Click **⬡ SMB: Browse Shares & Credentials** in the Scan Configuration panel
+2. Enter `127.0.0.1:4445` in the **Server / Host** field
+3. Leave Username and Password blank (the share allows guest access)
+4. Click **⬡ Discover Shares** — `testshare` appears in the list
+5. Click **testshare** to select it — the Path field is populated automatically
+6. Click **Start Scan**
+
+**Scan it from the CLI:**
+
 ```bash
-sudo mkdir -p /mnt/testshare
-sudo mount -t cifs //127.0.0.1/testshare /mnt/testshare -o port=4445,guest,vers=2.0
-# Scan: /mnt/testshare
-```
-
-**macOS:**
-```
-open 'smb://127.0.0.1:4445/testshare'
-# Scan: /Volumes/testshare (or wherever Finder mounts it)
-```
-
-**Windows:**
-```cmd
-net use Z: \\127.0.0.1\testshare "" /user:guest /port:4445
-:: Scan: Z:\
+python3 leaklens.py scan --path "\\\\127.0.0.1\\testshare" --smb-port 4445
 ```
 
 **Stop it:**

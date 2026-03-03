@@ -14,4 +14,4 @@ RUN chmod -R 755 /shares/testshare && \
 
 EXPOSE 445 139
 
-CMD ["smbd", "--foreground", "--no-process-group", "--log-stdout"]
+CMD ["smbd", "--foreground", "--no-process-group", "--debug-stdout"]

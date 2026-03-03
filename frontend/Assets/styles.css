@@ -261,15 +261,28 @@
     }
     .btn-ghost:disabled { opacity: 0.3; cursor: not-allowed; }
 
+    /* 2-column grid for compact settings (Max Size + Workers) */
+    .config-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 12px;
+      margin-bottom: 0;
+    }
+    .config-row label { margin-bottom: 4px; }
+
     /* SMB shares dropdown */
     .shares-list {
       margin-top: 8px;
       background: var(--bg);
       border: 1px solid var(--border2);
       border-radius: 4px;
-      overflow: hidden;
+      max-height: 130px;
+      overflow-y: auto;
     }
     .share-item {
+      display: flex;
+      align-items: center;
       padding: 7px 10px;
       font-size: 11px;
       cursor: pointer;
@@ -279,6 +292,32 @@
     }
     .share-item:last-child { border-bottom: none; }
     .share-item:hover { background: rgba(0,212,255,0.06); color: var(--accent); }
+
+    /* Selected share highlight */
+    .share-item.selected {
+      background: rgba(0,212,255,0.10);
+      color: var(--accent);
+      border-left: 2px solid var(--accent);
+    }
+
+    /* Administrative shares (ADMIN$, C$, IPC$) — visible but subdued */
+    .share-item.admin-share { color: var(--text-dim); font-style: italic; }
+    .share-item.admin-share:hover { color: var(--text); }
+    .share-item.admin-share.selected { color: var(--accent); font-style: normal; }
+
+    /* Header above share list */
+    .shares-header {
+      font-size: 10px;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      padding: 8px 10px 4px;
+    }
+    .shares-header strong { color: var(--text); font-style: normal; }
+
+    /* Icon and name columns in share items */
+    .share-icon { color: var(--accent); margin-right: 6px; font-size: 9px; flex-shrink: 0; }
+    .share-name  { flex: 1; }
 
     /* ── Stats ── */
     .stats-grid {
@@ -780,6 +819,80 @@
       transition: all 0.2s;
     }
     .btn-sm:hover { color: var(--accent); border-color: var(--accent2); }
+
+    /* ── SMB Modal ── */
+    .smb-modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.7);
+      z-index: 300;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s;
+    }
+    .smb-modal-overlay.open { opacity: 1; pointer-events: all; }
+
+    .smb-modal {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%) scale(0.96);
+      width: 420px;
+      max-width: calc(100vw - 40px);
+      max-height: 85vh;
+      background: var(--bg2);
+      border: 1px solid var(--border2);
+      border-radius: 8px;
+      z-index: 301;
+      overflow-y: auto;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s, transform 0.2s cubic-bezier(0.22,1,0.36,1);
+    }
+    .smb-modal.open {
+      opacity: 1;
+      pointer-events: all;
+      transform: translate(-50%, -50%) scale(1);
+    }
+
+    .smb-modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      font-size: 10px;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--accent);
+      position: sticky;
+      top: 0;
+      background: var(--bg2);
+      z-index: 1;
+    }
+    .smb-modal-close {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+      cursor: pointer;
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 3px;
+      font-family: var(--mono);
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .smb-modal-close:hover { color: var(--text); border-color: var(--border2); }
+
+    .smb-modal-body { padding: 16px; }
+
+    /* 2-column credential row inside modal */
+    .cred-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 0;
+    }
+    .cred-row label { margin-bottom: 4px; }
 
     /* ── Scrollbar ── */
     ::-webkit-scrollbar { width: 6px; }

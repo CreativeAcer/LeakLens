@@ -36,34 +36,103 @@ def parse_unc(path: str) -> tuple[str, str, str]:
     return server, share, rel
 
 
-def register_session(server: str, username: str = None, password: str = None, domain: str = None):
+def register_session(server: str, username: str = None, password: str = None,
+                     domain: str = None, port: int = 445):
     """Register an SMB session for the given server."""
     if not SMB_AVAILABLE:
         raise RuntimeError("smbprotocol is not installed. Run: pip install smbprotocol")
 
-    kwargs = {"connection_timeout": 30}
     if username:
-        kwargs["username"] = username
-    if password is not None:
-        kwargs["password"] = password
-    if domain:
-        kwargs["auth_protocol"] = "ntlm"
-        kwargs["domain"] = domain
+        kwargs = {
+            "connection_timeout": 30,
+            "port": port,
+            "username": username,
+        }
+        if password is not None:
+            kwargs["password"] = password
+        if domain:
+            kwargs["auth_protocol"] = "ntlm"
+            kwargs["domain"] = domain
+    else:
+        # Null/anonymous session: use NTLM with a dummy username so that
+        # Samba's "map to guest = Bad User" maps it to the guest account.
+        # require_signing must be False because guest sessions have no signing key.
+        smbclient.ClientConfig(require_secure_negotiate=False)
+        kwargs = {
+            "connection_timeout": 30,
+            "port": port,
+            "username": "nobody",
+            "password": password if password is not None else "",
+            "auth_protocol": "ntlm",
+            "require_signing": False,
+        }
 
     smbclient.register_session(server, **kwargs)
 
 
-def list_shares(host: str, username: str = None, password: str = None, domain: str = None) -> list[str]:
-    """List visible shares on the given SMB host."""
-    if not SMB_AVAILABLE:
-        raise RuntimeError("smbprotocol is not installed. Run: pip install smbprotocol")
+def list_shares(host: str, username: str = None, password: str = None,
+                domain: str = None, port: int = 445) -> list[str]:
+    """
+    List visible shares on the given SMB host using the system smbclient binary.
+    smbprotocol does not expose a share-enumeration API, so we shell out to
+    the Samba smbclient tool which handles null sessions reliably.
+    """
+    import subprocess
+    import shutil
 
-    register_session(host, username=username, password=password, domain=domain)
-    shares = smbclient.listshares(host)
-    return list(shares)
+    if not shutil.which("smbclient"):
+        raise RuntimeError(
+            "smbclient binary not found. Install samba-client (e.g. apt install smbclient)."
+        )
+
+    cmd = ["smbclient", "-L", f"//{host}", "-p", str(port)]
+
+    if username:
+        cred = username
+        if password is not None:
+            cred += f"%{password}"
+        cmd.extend(["-U", cred])
+        if domain:
+            cmd.extend(["-W", domain])
+    else:
+        cmd.extend(["-N", "-U", "%"])  # null / anonymous session
+
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=15
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("Connection to host timed out.")
+
+    output = result.stdout + result.stderr
+
+    shares = []
+    in_list = False
+    for line in output.splitlines():
+        if "Sharename" in line and "Type" in line:
+            in_list = True
+            continue
+        if not in_list:
+            continue
+        stripped = line.strip()
+        if not stripped or stripped.startswith("-"):
+            continue
+        # Lines past the share list (workgroup section, reconnect notice, etc.)
+        if not line.startswith("\t") and not line.startswith(" "):
+            break
+        parts = stripped.split()
+        if parts:
+            shares.append(parts[0])
+
+    if not shares and result.returncode != 0:
+        # Surface the actual smbclient error message
+        msg = output.strip().splitlines()[-1] if output.strip() else "Unknown error"
+        raise RuntimeError(msg)
+
+    return shares
 
 
-def walk_smb(unc_root: str, stop_event=None):
+def walk_smb(unc_root: str, stop_event=None, port: int = 445):
     """
     Recursively walk an SMB share.
     Yields (smb_path, entry_name, smb_stat) for each file,
@@ -77,7 +146,7 @@ def walk_smb(unc_root: str, stop_event=None):
         if stop_event and stop_event.is_set():
             return
         try:
-            for entry in smbclient.scandir(path):
+            for entry in smbclient.scandir(path, port=port):
                 if stop_event and stop_event.is_set():
                     return
                 full = f"{path}\\{entry.name}"
@@ -85,7 +154,9 @@ def walk_smb(unc_root: str, stop_event=None):
                     yield from _recurse(full)
                 elif entry.is_file(follow_symlinks=False):
                     try:
-                        stat = entry.stat()
+                        # entry.stat() lazily fetches on default port 445;
+                        # use smbclient.stat() with the explicit port instead.
+                        stat = smbclient.stat(full, port=port)
                         yield full, entry.name, stat
                     except Exception as e:
                         yield ("__error__", full, str(e))
@@ -95,12 +166,12 @@ def walk_smb(unc_root: str, stop_event=None):
     yield from _recurse(normalize_unc(unc_root))
 
 
-def read_smb_file(smb_path: str, max_size: int) -> str | None:
+def read_smb_file(smb_path: str, max_size: int, port: int = 445) -> str | None:
     """Read the content of a file over SMB. Returns None on error or if too large."""
     if not SMB_AVAILABLE:
         return None
     try:
-        with smbclient.open_file(smb_path, mode="rb") as f:
+        with smbclient.open_file(smb_path, mode="rb", port=port) as f:
             # Check size first
             f.seek(0, 2)
             size = f.tell()
