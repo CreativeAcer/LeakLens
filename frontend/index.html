@@ -37,16 +37,25 @@
     <div class="panel">
       <div class="panel-header">⬡ Scan Configuration</div>
       <div class="panel-body">
-        <label>File Share Path</label>
-        <input type="text" id="scanPath" placeholder="\\server\share or C:\path" oninput="onPathInput()" />
+        <label>Path</label>
+        <input type="text" id="scanPath" placeholder="\\server\share  or  C:\path" oninput="onPathInput()" />
 
-        <label>Max File Size (MB)</label>
-        <input type="number" id="maxFileSizeMB" value="10" min="1" max="500" />
+        <button class="btn btn-ghost" onclick="openSmbModal()" style="margin-bottom:12px;">
+          ⬡ SMB: Browse Shares &amp; Credentials
+        </button>
 
-        <label>Worker Threads</label>
-        <input type="number" id="workerCount" value="8" min="1" max="32" title="Parallel file analysis threads (1–32). Default 8 for SMB, increase to 16 for large local scans." />
+        <div class="config-row">
+          <div>
+            <label>Max Size (MB)</label>
+            <input type="number" id="maxFileSizeMB" value="10" min="1" max="500" style="margin-bottom:0;" />
+          </div>
+          <div>
+            <label>Workers</label>
+            <input type="number" id="workerCount" value="8" min="1" max="32" title="Parallel file analysis threads (1–32). Default 8 for SMB, increase to 16 for large local scans." style="margin-bottom:0;" />
+          </div>
+        </div>
 
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:12px;">
           <input type="checkbox" id="resumeScan" style="width:auto;margin:0;" title="Resume from the last checkpoint if the previous scan was interrupted." />
           Resume interrupted scan
         </label>
@@ -57,23 +66,6 @@
         <button class="btn btn-danger" id="stopBtn" onclick="stopScan()" disabled>
           <span>■</span> Stop Scan
         </button>
-      </div>
-    </div>
-
-    <!-- SMB Credentials (revealed on UNC path) -->
-    <div class="panel" id="smbPanel" style="display:none">
-      <div class="panel-header">⬡ SMB Credentials</div>
-      <div class="panel-body">
-        <label>Username</label>
-        <input type="text" id="smbUsername" placeholder="DOMAIN\user  (blank = guest)" />
-        <label>Password</label>
-        <input type="password" id="smbPassword" placeholder="(leave blank for guest)" />
-        <label>Domain</label>
-        <input type="text" id="smbDomain" placeholder="optional" />
-        <button class="btn btn-ghost" id="discoverBtn" onclick="discoverShares()">
-          ⬡ Discover Shares
-        </button>
-        <div id="sharesList"></div>
       </div>
     </div>
 
@@ -196,6 +188,39 @@
 <div class="drawer" id="drawer">
   <button class="drawer-close" onclick="closeDrawer()">✕ Close</button>
   <div id="drawerContent"></div>
+</div>
+
+<!-- ── SMB MODAL ── -->
+<div class="smb-modal-overlay" id="smbModalOverlay" onclick="closeSmbModal()"></div>
+<div class="smb-modal" id="smbModal">
+  <div class="smb-modal-header">
+    <span>⬡ SMB Share Browser</span>
+    <button class="smb-modal-close" onclick="closeSmbModal()">✕</button>
+  </div>
+  <div class="smb-modal-body">
+    <label>Server / Host</label>
+    <input type="text" id="smbHost" placeholder="192.168.1.10  or  host:4445" oninput="onSmbHostInput()" />
+
+    <div class="cred-row">
+      <div>
+        <label>Username</label>
+        <input type="text" id="smbUsername" placeholder="DOMAIN\user" style="margin-bottom:0;" />
+      </div>
+      <div>
+        <label>Password</label>
+        <input type="password" id="smbPassword" placeholder="(blank = guest)" style="margin-bottom:0;" />
+      </div>
+    </div>
+
+    <label style="margin-top:12px;">Domain</label>
+    <input type="text" id="smbDomain" placeholder="optional" />
+
+    <button class="btn btn-ghost" id="discoverBtn" onclick="discoverShares()">
+      ⬡ Discover Shares
+    </button>
+
+    <div id="sharesList"></div>
+  </div>
 </div>
 
 <script src="Assets/app.js"></script>

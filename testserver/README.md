@@ -20,12 +20,6 @@ start-testserver.bat   ← start
 stop-testserver.bat    ← stop
 ```
 
-After starting, mount the share and scan the mapped drive:
-```cmd
-net use Z: \\127.0.0.1\testshare /user:guest "" /p:no /port:4445
-```
-Then point LeakLens at `Z:\`
-
 ### Linux / macOS
 ```bash
 chmod +x start-testserver.sh stop-testserver.sh
@@ -33,15 +27,28 @@ chmod +x start-testserver.sh stop-testserver.sh
 ./stop-testserver.sh
 ```
 
-After starting, mount the share:
-```bash
-# Linux
-sudo mount -t cifs //127.0.0.1/testshare /mnt/testshare -o port=4445,guest,vers=2.0
+---
 
-# macOS
-open 'smb://127.0.0.1:4445/testshare'
+## Connecting LeakLens to the test server
+
+No mounting required. LeakLens connects directly over SMB using `127.0.0.1:4445`.
+
+### Via the UI (recommended)
+
+1. Start LeakLens (`start.sh` / `start.bat` or `python3 leaklens.py`)
+2. Open **http://localhost:3000** in your browser
+3. Click **⬡ SMB: Browse Shares & Credentials** in the Scan Configuration panel
+4. Enter `127.0.0.1:4445` in the **Server / Host** field
+5. Leave Username and Password blank (the share allows guest/anonymous access)
+6. Click **⬡ Discover Shares** — `testshare` appears in the list
+7. Click **testshare** to select it — the Path field is populated automatically
+8. Click **Start Scan**
+
+### Via the CLI
+
+```bash
+python3 leaklens.py scan --path "\\\\127.0.0.1\\testshare" --smb-port 4445
 ```
-Then point LeakLens at the mounted path.
 
 ---
 

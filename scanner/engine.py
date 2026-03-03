@@ -118,6 +118,7 @@ def _scan_smb(
     username: str = None,
     password: str = None,
     domain: str = None,
+    smb_port: int = 445,
 ) -> Generator:
     """Walk an SMB share and yield file items or error/log events."""
     if not SMB_AVAILABLE:
@@ -130,12 +131,12 @@ def _scan_smb(
         return
 
     try:
-        register_session(server, username=username, password=password, domain=domain)
+        register_session(server, username=username, password=password, domain=domain, port=smb_port)
     except Exception as e:
         yield ("error", f"SMB authentication failed for {server}: {e}")
         return
 
-    for item in walk_smb(unc_root, stop_event=stop_event):
+    for item in walk_smb(unc_root, stop_event=stop_event, port=smb_port):
         if stop_event.is_set():
             return
         if item[0] == "__error__":
@@ -187,6 +188,7 @@ def scan_path(
     reports_dir: str = None,
     workers: int = 8,
     resume: bool = False,
+    smb_port: int = 445,
 ) -> Generator:
     """
     Scan root (local path or UNC) and yield JSON-serialisable event dicts.
@@ -311,7 +313,7 @@ def scan_path(
             pass
         elif ext in TARGET_EXTENSIONS or (risky_name and ext == ""):
             if size_bytes <= max_size:
-                content = read_smb_file(smb_path, max_size)
+                content = read_smb_file(smb_path, max_size, port=smb_port)
                 if content:
                     matched = scan_content(content, smb_path)
         elif not risky_name:
@@ -364,7 +366,7 @@ def scan_path(
 
         try:
             if is_smb:
-                for ev in _scan_smb(root, max_size, stop_event, username, password, domain):
+                for ev in _scan_smb(root, max_size, stop_event, username, password, domain, smb_port):
                     if stop_event.is_set():
                         break
                     if ev[0] == "error":

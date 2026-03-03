@@ -76,6 +76,7 @@ def scan():
         max_file_size_mb = int(data.get("maxFileSizeMB", 10))
         workers = max(1, min(16, int(data.get("workers", 8))))
         resume = bool(data.get("resume", False))
+        smb_port = max(1, min(65535, int(data.get("smbPort", 445))))
         username, password, domain = _extract_smb_creds(data)
 
         if not scan_path:
@@ -103,6 +104,7 @@ def scan():
                     reports_dir=REPORTS_DIR,
                     workers=workers,
                     resume=resume,
+                    smb_port=smb_port,
                 ):
                     result_queue.put(event)
             except Exception:
@@ -166,11 +168,19 @@ def list_shares():
     if not _VALID_HOST.match(host):
         return jsonify({"error": "Invalid host format."}), 400
 
+    try:
+        port = int(data.get("port", 445))
+        if not (1 <= port <= 65535):
+            raise ValueError
+    except (ValueError, TypeError):
+        return jsonify({"error": "Invalid port."}), 400
+
     username, password, domain = _extract_smb_creds(data)
 
     try:
         from scanner.smb import list_shares as smb_list_shares
-        shares = smb_list_shares(host, username=username, password=password, domain=domain)
+        shares = smb_list_shares(host, username=username, password=password,
+                                 domain=domain, port=port)
         return jsonify({"shares": shares})
     except RuntimeError as e:
         return jsonify({"error": str(e)}), 503

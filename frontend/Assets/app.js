@@ -10,11 +10,47 @@
   const ROW_H          = 44;    // px — must match tbody tr rendered height
   const VS_OVERSCAN    = 5;     // extra rows rendered above/below viewport
 
-  // ── Path input — show/hide SMB panel ──────────────────────────────────────
+  // ── SMB modal ──────────────────────────────────────────────────────────────
+  function openSmbModal() {
+    document.getElementById('smbModalOverlay').classList.add('open');
+    document.getElementById('smbModal').classList.add('open');
+    // Pre-fill host from current scanPath if it looks like a UNC path
+    const path = document.getElementById('scanPath').value.trim();
+    if ((path.startsWith('\\\\') || path.startsWith('//')) && !document.getElementById('smbHost').value) {
+      const host = path.replace(/^\\\\|^\/\//, '').split(/[\\\/]/)[0];
+      if (host) document.getElementById('smbHost').value = host;
+    }
+  }
+
+  function closeSmbModal() {
+    document.getElementById('smbModalOverlay').classList.remove('open');
+    document.getElementById('smbModal').classList.remove('open');
+  }
+
+  // ── Path input — sync smbHost when UNC is typed directly ─────────────────
   function onPathInput() {
     const v = document.getElementById('scanPath').value;
     const isUnc = v.startsWith('\\\\') || v.startsWith('//');
-    document.getElementById('smbPanel').style.display = isUnc ? 'block' : 'none';
+    if (isUnc) {
+      const host = v.replace(/^\\\\|^\/\//, '').split(/[\\\/]/)[0];
+      const hostEl = document.getElementById('smbHost');
+      if (host && !hostEl.value) hostEl.value = host;
+    }
+  }
+
+  // ── SMB host input — normalise and sync scanPath ──────────────────────────
+  function onSmbHostInput() {
+    let raw = document.getElementById('smbHost').value.trim();
+    // If user pasted a full UNC path, extract just the host
+    if (raw.startsWith('\\\\') || raw.startsWith('//')) {
+      raw = raw.replace(/^\\\\|^\/\//, '').split(/[\\\/]/)[0];
+      document.getElementById('smbHost').value = raw;
+    }
+    document.getElementById('sharesList').innerHTML = '';
+    if (raw) {
+      const hostOnly = raw.split(':')[0];
+      document.getElementById('scanPath').value = '\\\\' + hostOnly;
+    }
   }
 
   // ── Tab switching ──────────────────────────────────────────────────────────
@@ -49,6 +85,15 @@
     const password      = document.getElementById('smbPassword')?.value || '';
     const domain        = document.getElementById('smbDomain')?.value.trim() || '';
 
+    // Parse port from the Server/Host field (e.g. "127.0.0.1:4445")
+    let smbPort = 445;
+    const rawHost = document.getElementById('smbHost')?.value.trim() || '';
+    const ci = rawHost.lastIndexOf(':');
+    if (ci > 0) {
+      const p = parseInt(rawHost.slice(ci + 1), 10);
+      if (p > 0 && p < 65536) smbPort = p;
+    }
+
     if (!scanPath) { alert('Please enter a file share path.'); return; }
 
     // Reset
@@ -72,7 +117,7 @@
       response = await fetch(`${API}/scan`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scanPath, maxFileSizeMB, workers, resume, username, password, domain }),
+        body: JSON.stringify({ scanPath, maxFileSizeMB, workers, resume, username, password, domain, smbPort }),
       });
     } catch (e) {
       alert('Cannot reach backend. Is it running?\n' + e.message);
@@ -179,8 +224,22 @@
 
   // ── SMB: Discover shares ───────────────────────────────────────────────────
   async function discoverShares() {
-    const path = document.getElementById('scanPath').value.trim();
-    const host = path.replace(/^\\\\|^\/\//, '').split(/[\\\/]/)[0];
+    let raw = document.getElementById('smbHost').value.trim()
+            || (() => {
+                 const p = document.getElementById('scanPath').value.trim();
+                 return p.replace(/^\\\\|^\/\//, '').split(/[\\\/]/)[0];
+               })();
+    // Normalise if someone pasted a full UNC path into the host field
+    if (raw.startsWith('\\\\') || raw.startsWith('//')) {
+      raw = raw.replace(/^\\\\|^\/\//, '').split(/[\\\/]/)[0];
+    }
+    // Parse optional :port suffix (e.g. 127.0.0.1:4445)
+    let host = raw, port = 445;
+    const colonIdx = raw.lastIndexOf(':');
+    if (colonIdx > 0) {
+      const maybePort = parseInt(raw.slice(colonIdx + 1), 10);
+      if (maybePort > 0 && maybePort < 65536) { port = maybePort; host = raw.slice(0, colonIdx); }
+    }
     if (!host) { alert('Enter a server hostname or IP first.'); return; }
 
     const btn = document.getElementById('discoverBtn');
@@ -193,6 +252,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           host,
+          port,
           username: document.getElementById('smbUsername').value.trim(),
           password: document.getElementById('smbPassword').value,
           domain:   document.getElementById('smbDomain').value.trim(),
@@ -207,10 +267,16 @@
         container.innerHTML = '<p style="font-size:11px;color:var(--text-dim);margin-top:8px;">No shares found.</p>';
         return;
       }
-      container.innerHTML = '<div class="shares-list">' +
-        data.shares.map(s =>
-          `<div class="share-item" onclick="selectShare('${escHtml(host)}','${escHtml(s)}')">${escHtml(s)}</div>`
-        ).join('') + '</div>';
+
+      const adminShares = data.shares.filter(s => s.endsWith('$'));
+      const userShares  = data.shares.filter(s => !s.endsWith('$'));
+      const renderItem  = s =>
+        `<div class="share-item${s.endsWith('$') ? ' admin-share' : ''}" onclick="selectShare('${escHtml(host)}','${escHtml(s)}',this)"><span class="share-icon">${s.endsWith('$') ? '⬡' : '▸'}</span><span class="share-name">${escHtml(s)}</span></div>`;
+      container.innerHTML =
+        `<div class="shares-header">${data.shares.length} share${data.shares.length !== 1 ? 's' : ''} found on <strong>${escHtml(host)}</strong></div>` +
+        '<div class="shares-list">' +
+        [...userShares, ...adminShares].map(renderItem).join('') +
+        '</div>';
     } catch (e) {
       alert('Share discovery failed: ' + e.message);
     } finally {
@@ -219,8 +285,12 @@
     }
   }
 
-  function selectShare(host, share) {
+  function selectShare(host, share, el) {
     document.getElementById('scanPath').value = `\\\\${host}\\${share}`;
+    document.querySelectorAll('.share-item').forEach(e => e.classList.remove('selected'));
+    if (el) el.classList.add('selected');
+    // Close modal after a brief visual confirmation
+    setTimeout(closeSmbModal, 300);
   }
 
   // ── Status ─────────────────────────────────────────────────────────────────
