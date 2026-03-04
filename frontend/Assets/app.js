@@ -1,5 +1,19 @@
   const API = '/api';
 
+  // ── UNC / host helpers ─────────────────────────────────────────────────────
+  function parseUncHost(path) {
+    return path.replace(/^\\\\|^\/\//, '').split(/[\\\/]/)[0];
+  }
+
+  function parseHostPort(str) {
+    const ci = str.lastIndexOf(':');
+    if (ci > 0) {
+      const p = parseInt(str.slice(ci + 1), 10);
+      if (p > 0 && p < 65536) return { host: str.slice(0, ci), port: p };
+    }
+    return { host: str, port: 445 };
+  }
+
   let findings         = [];
   let filteredFindings = [];   // filtered + sorted subset rendered by virtual scroll
   let activeFilter     = 'ALL';
@@ -17,7 +31,7 @@
     // Pre-fill host from current scanPath if it looks like a UNC path
     const path = document.getElementById('scanPath').value.trim();
     if ((path.startsWith('\\\\') || path.startsWith('//')) && !document.getElementById('smbHost').value) {
-      const host = path.replace(/^\\\\|^\/\//, '').split(/[\\\/]/)[0];
+      const host = parseUncHost(path);
       if (host) document.getElementById('smbHost').value = host;
     }
   }
@@ -32,7 +46,7 @@
     const v = document.getElementById('scanPath').value;
     const isUnc = v.startsWith('\\\\') || v.startsWith('//');
     if (isUnc) {
-      const host = v.replace(/^\\\\|^\/\//, '').split(/[\\\/]/)[0];
+      const host = parseUncHost(v);
       const hostEl = document.getElementById('smbHost');
       if (host && !hostEl.value) hostEl.value = host;
     }
@@ -43,7 +57,7 @@
     let raw = document.getElementById('smbHost').value.trim();
     // If user pasted a full UNC path, extract just the host
     if (raw.startsWith('\\\\') || raw.startsWith('//')) {
-      raw = raw.replace(/^\\\\|^\/\//, '').split(/[\\\/]/)[0];
+      raw = parseUncHost(raw);
       document.getElementById('smbHost').value = raw;
     }
     document.getElementById('sharesList').innerHTML = '';
@@ -86,13 +100,8 @@
     const domain        = document.getElementById('smbDomain')?.value.trim() || '';
 
     // Parse port from the Server/Host field (e.g. "127.0.0.1:4445")
-    let smbPort = 445;
     const rawHost = document.getElementById('smbHost')?.value.trim() || '';
-    const ci = rawHost.lastIndexOf(':');
-    if (ci > 0) {
-      const p = parseInt(rawHost.slice(ci + 1), 10);
-      if (p > 0 && p < 65536) smbPort = p;
-    }
+    const { port: smbPort } = parseHostPort(rawHost);
 
     if (!scanPath) { alert('Please enter a file share path.'); return; }
 
@@ -225,21 +234,13 @@
   // ── SMB: Discover shares ───────────────────────────────────────────────────
   async function discoverShares() {
     let raw = document.getElementById('smbHost').value.trim()
-            || (() => {
-                 const p = document.getElementById('scanPath').value.trim();
-                 return p.replace(/^\\\\|^\/\//, '').split(/[\\\/]/)[0];
-               })();
+            || parseUncHost(document.getElementById('scanPath').value.trim());
     // Normalise if someone pasted a full UNC path into the host field
     if (raw.startsWith('\\\\') || raw.startsWith('//')) {
-      raw = raw.replace(/^\\\\|^\/\//, '').split(/[\\\/]/)[0];
+      raw = parseUncHost(raw);
     }
     // Parse optional :port suffix (e.g. 127.0.0.1:4445)
-    let host = raw, port = 445;
-    const colonIdx = raw.lastIndexOf(':');
-    if (colonIdx > 0) {
-      const maybePort = parseInt(raw.slice(colonIdx + 1), 10);
-      if (maybePort > 0 && maybePort < 65536) { port = maybePort; host = raw.slice(0, colonIdx); }
-    }
+    const { host, port } = parseHostPort(raw);
     if (!host) { alert('Enter a server hostname or IP first.'); return; }
 
     const btn = document.getElementById('discoverBtn');

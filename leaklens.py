@@ -14,12 +14,13 @@ import logging
 import os
 import queue
 import re
-import sqlite3
 import threading
 
 __version__ = "1.1.0"
 
 from flask import Flask, Response, jsonify, request, send_from_directory, stream_with_context
+from scanner.engine import scan_path
+from scanner import db as _db
 
 logging.basicConfig(
     level=logging.WARNING,
@@ -72,14 +73,14 @@ def scan():
             return jsonify({"error": "A scan is already running."}), 409
 
         data = request.get_json(silent=True) or {}
-        scan_path = data.get("scanPath", "").strip()
+        scan_path_val = data.get("scanPath", "").strip()
         max_file_size_mb = int(data.get("maxFileSizeMB", 10))
         workers = max(1, min(16, int(data.get("workers", 8))))
         resume = bool(data.get("resume", False))
         smb_port = max(1, min(65535, int(data.get("smbPort", 445))))
         username, password, domain = _extract_smb_creds(data)
 
-        if not scan_path:
+        if not scan_path_val:
             return jsonify({"error": "scanPath is required."}), 400
 
         max_size = max_file_size_mb * 1024 * 1024
@@ -93,9 +94,8 @@ def scan():
 
         def run():
             try:
-                from scanner.engine import scan_path as do_scan
-                for event in do_scan(
-                    scan_path,
+                for event in scan_path(
+                    scan_path_val,
                     max_size,
                     stop_event,
                     username=username,
@@ -194,24 +194,7 @@ def list_shares():
 @app.route("/api/scans", methods=["GET"])
 def list_scans():
     """Return metadata for all completed/in-progress SQLite scan databases."""
-    if not os.path.isdir(REPORTS_DIR):
-        return jsonify([])
-    scans = []
-    for fname in os.listdir(REPORTS_DIR):
-        if not fname.endswith(".db"):
-            continue
-        db_path = os.path.join(REPORTS_DIR, fname)
-        try:
-            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-            conn.row_factory = sqlite3.Row
-            row = conn.execute("SELECT * FROM scans LIMIT 1").fetchone()
-            if row:
-                scans.append(dict(row))
-            conn.close()
-        except Exception as e:
-            _log.debug("Could not read scan DB %s: %s", db_path, e)
-    scans.sort(key=lambda s: s.get("started_at", 0), reverse=True)
-    return jsonify(scans)
+    return jsonify(_db.get_all_scans(REPORTS_DIR))
 
 
 # ─── GET /api/findings ────────────────────────────────────────────────────────
@@ -248,34 +231,7 @@ def get_findings():
         return jsonify({"error": "Scan not found"}), 404
 
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-        conn.row_factory = sqlite3.Row
-
-        conditions = ["scan_id = ?"]
-        params: list = [scan_id]
-
-        if risk != "ALL":
-            conditions.append("risk_level = ?")
-            params.append(risk)
-
-        if search:
-            conditions.append("(file_name LIKE ? OR full_path LIKE ?)")
-            params.extend([f"%{search}%", f"%{search}%"])
-
-        where = " AND ".join(conditions)
-
-        total = conn.execute(
-            f"SELECT COUNT(*) FROM findings WHERE {where}", params
-        ).fetchone()[0]
-
-        rows = conn.execute(
-            f"SELECT data FROM findings WHERE {where} ORDER BY id LIMIT ? OFFSET ?",
-            params + [per_page, page * per_page],
-        ).fetchall()
-
-        findings = [json.loads(r["data"]) for r in rows]
-        conn.close()
-
+        total, findings = _db.query_findings(db_path, scan_id, page, per_page, risk, search)
         return jsonify({
             "scan_id":  scan_id,
             "total":    total,
@@ -301,24 +257,16 @@ def export_scan(scan_id):
         return jsonify({"error": "Scan not found"}), 404
 
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-        conn.row_factory = sqlite3.Row
-        scan_row = conn.execute("SELECT * FROM scans WHERE id = ?", (scan_id,)).fetchone()
-        if not scan_row:
-            conn.close()
+        scan_meta = _db.get_scan_meta(db_path, scan_id)
+        if not scan_meta:
             return jsonify({"error": "Scan not found"}), 404
-        rows = conn.execute(
-            "SELECT data FROM findings WHERE scan_id = ? ORDER BY id",
-            (scan_id,),
-        ).fetchall()
-        findings = [json.loads(r["data"]) for r in rows]
-        conn.close()
+        findings = _db.get_all_findings(db_path, scan_id)
         return jsonify({
             "scan_id":   scan_id,
-            "scan_path": scan_row["scan_path"],
-            "scan_date": scan_row["scan_date"],
-            "scanned":   scan_row["scanned"],
-            "hits":      scan_row["hits"],
+            "scan_path": scan_meta["scan_path"],
+            "scan_date": scan_meta["scan_date"],
+            "scanned":   scan_meta["scanned"],
+            "hits":      scan_meta["hits"],
             "findings":  findings,
         })
     except Exception:
