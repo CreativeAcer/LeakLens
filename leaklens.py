@@ -12,11 +12,8 @@ Opens at http://localhost:3000 (or LEAKLENS_PORT / LEAKLENS_HOST env vars)
 import json
 import logging
 import os
-import platform
 import queue
 import re
-import subprocess
-import sys
 import threading
 
 __version__ = "1.1.0"
@@ -279,53 +276,7 @@ def export_scan(scan_id):
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
 
-def _ensure_windows_deps():
-    """
-    On Windows, SMB share enumeration requires impacket (pure Python, no system
-    binaries). Check at startup and offer to install it automatically.
-    Does nothing on Linux/macOS where the smbclient binary is the fallback.
-    """
-    if platform.system() != "Windows":
-        return
-
-    try:
-        import impacket  # noqa: F401
-        return  # already installed
-    except ImportError:
-        pass
-
-    print(
-        "\n  [LeakLens] SMB share enumeration on Windows requires the 'impacket' package,\n"
-        "  which is not currently installed.\n"
-    )
-    try:
-        answer = input("  Install it now? (impacket, ~20 MB)  [Y/n]: ").strip().lower()
-    except EOFError:
-        answer = "n"
-
-    if answer in ("", "y", "yes"):
-        print("  Installing impacket...")
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "impacket"],
-            check=False,
-        )
-        if result.returncode == 0:
-            print("  impacket installed successfully.\n")
-        else:
-            print(
-                "  Installation failed. You can install it manually:\n"
-                "    pip install impacket\n"
-                "  Share enumeration will be unavailable until then.\n"
-            )
-    else:
-        print(
-            "  Skipping. Share enumeration will be unavailable.\n"
-            "  To install later: pip install impacket\n"
-        )
-
-
 if __name__ == "__main__":
-    _ensure_windows_deps()
     _host = os.environ.get("LEAKLENS_HOST", "127.0.0.1")
     _port = int(os.environ.get("LEAKLENS_PORT", 3000))
     os.makedirs(REPORTS_DIR, exist_ok=True)
