@@ -122,17 +122,61 @@ def register_session(server: str, username: str = None, password: str = None,
 def list_shares(host: str, username: str = None, password: str = None,
                 domain: str = None, port: int = 445) -> list[str]:
     """
-    List visible shares on the given SMB host using the system smbclient binary.
-    smbprotocol does not expose a share-enumeration API, so we shell out to
-    the Samba smbclient tool which handles null sessions reliably.
-    """
-    import subprocess
-    import shutil
+    List visible shares on the given SMB host.
 
-    if not shutil.which("smbclient"):
-        raise RuntimeError(
-            "smbclient binary not found. Install samba-client (e.g. apt install smbclient)."
-        )
+    Tries in order:
+      1. impacket (pure Python, cross-platform) — install with: pip install impacket
+      2. smbclient binary (Linux/macOS, requires: apt install smbclient)
+
+    Raises RuntimeError if neither is available or enumeration fails.
+    """
+    # 1. Pure-Python path via impacket (works on Windows, Linux, macOS)
+    try:
+        return _list_shares_impacket(host, username, password, domain, port)
+    except ImportError:
+        pass  # impacket not installed — try binary fallback
+
+    # 2. Binary fallback (Samba smbclient, typically Linux/macOS)
+    import shutil
+    if shutil.which("smbclient"):
+        return _list_shares_binary(host, username, password, domain, port)
+
+    raise RuntimeError(
+        "Share enumeration requires either:\n"
+        "  pip install impacket  (cross-platform, including Windows)\n"
+        "or the smbclient binary  (Linux/macOS: apt install smbclient)"
+    )
+
+
+def _list_shares_impacket(host: str, username: str = None, password: str = None,
+                           domain: str = None, port: int = 445) -> list[str]:
+    """Enumerate shares via impacket's NetrShareEnum DCE/RPC call."""
+    from impacket.dcerpc.v5 import transport, srvsvc  # raises ImportError if absent
+
+    rpctransport = transport.SMBTransport(
+        host, port, r"\srvsvc",
+        username=username or "",
+        password=password or "",
+        domain=domain or "",
+    )
+    dce = rpctransport.get_dce_rpc()
+    dce.connect()
+    dce.bind(srvsvc.MSRPC_UUID_SRVSVC)
+    resp = srvsvc.hNetrShareEnum(dce, 1)
+    dce.disconnect()
+
+    shares = []
+    for share in resp["InfoStruct"]["ShareInfo"]["Level1"]["Buffer"]:
+        name = share["shi1_netname"].rstrip("\x00")
+        if name:
+            shares.append(name)
+    return shares
+
+
+def _list_shares_binary(host: str, username: str = None, password: str = None,
+                         domain: str = None, port: int = 445) -> list[str]:
+    """Enumerate shares by shelling out to the smbclient binary (Linux/macOS)."""
+    import subprocess
 
     cmd = ["smbclient", "-L", f"//{host}", "-p", str(port)]
 

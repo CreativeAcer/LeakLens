@@ -105,7 +105,10 @@ Scans Windows file shares (and local paths) for exposed credentials:
 - Dependencies (pinned):
   - `flask==3.1.3`
   - `smbprotocol==1.16.0`
-  - `PyYAML==6.0.2`
+- Optional — required for **SMB share enumeration on Windows**:
+  - `impacket>=0.12.0` — LeakLens will prompt you to install this automatically on first run if it is missing
+
+> **Linux / macOS:** share enumeration uses the `smbclient` system binary (`apt install smbclient` / `brew install samba`). impacket is not required.
 
 ---
 
@@ -276,7 +279,7 @@ If a scan is stopped before completion, LeakLens writes a checkpoint file to `re
 The scanner uses a producer/consumer architecture:
 
 - A single **walk thread** traverses the file tree and feeds a bounded queue
-- A configurable number of **worker threads** (default 8, max 32) analyse files in parallel
+- A configurable number of **worker threads** (default 8, max 16) analyse files in parallel
 - Results flow through an events queue back to the SSE generator
 
 This allows I/O-bound SMB reads to overlap with CPU-bound pattern matching. The current scan rate (files/second) is shown live in the progress bar.
