@@ -16,7 +16,7 @@ import queue
 import re
 import threading
 
-__version__ = "1.1.0"
+__version__ = "1.4.0"
 
 from flask import Flask, Response, jsonify, request, send_from_directory, stream_with_context
 from scanner.engine import scan_path
@@ -90,7 +90,7 @@ def scan():
         _active["stop_event"] = stop_event
 
     def generate():
-        result_queue = queue.Queue()
+        result_queue = queue.Queue(maxsize=workers * 32)
 
         def run():
             try:
@@ -197,6 +197,28 @@ def list_scans():
     return jsonify(_db.get_all_scans(REPORTS_DIR))
 
 
+# ─── GET /api/scans/<scan_id> ─────────────────────────────────────────────────
+
+@app.route("/api/scans/<scan_id>", methods=["GET"])
+def get_scan(scan_id):
+    """Return metadata for a single scan by ID."""
+    if not _VALID_SCAN_ID.match(scan_id):
+        return jsonify({"error": "Invalid scan_id"}), 400
+
+    db_path = os.path.join(REPORTS_DIR, f"LeakLens_{scan_id}.db")
+    if not os.path.isfile(db_path):
+        return jsonify({"error": "Scan not found"}), 404
+
+    try:
+        meta = _db.get_scan_meta(db_path, scan_id)
+        if not meta:
+            return jsonify({"error": "Scan not found"}), 404
+        return jsonify(meta)
+    except Exception:
+        _log.exception("Failed to get scan metadata for %s", scan_id)
+        return jsonify({"error": "Failed to get scan metadata."}), 500
+
+
 # ─── GET /api/findings ────────────────────────────────────────────────────────
 
 @app.route("/api/findings", methods=["GET"])
@@ -280,5 +302,12 @@ if __name__ == "__main__":
     _host = os.environ.get("LEAKLENS_HOST", "127.0.0.1")
     _port = int(os.environ.get("LEAKLENS_PORT", 3000))
     os.makedirs(REPORTS_DIR, exist_ok=True)
-    print(f"\n  LeakLens running at http://{_host}:{_port}\n")
+    print(f"\n  LeakLens v{__version__} running at http://{_host}:{_port}\n")
+    if _host not in ("127.0.0.1", "::1", "localhost"):
+        print(
+            f"  WARNING: Binding to {_host} — the UI is served over plain HTTP.\n"
+            f"           SMB credentials entered in the browser will not be\n"
+            f"           encrypted in transit. Use a VPN or SSH tunnel if\n"
+            f"           accessing this instance across a network.\n"
+        )
     app.run(host=_host, port=_port, threaded=True, debug=False)

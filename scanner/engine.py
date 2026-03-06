@@ -25,6 +25,7 @@ from scanner.patterns import (
     FLAGGED_EXACT_NAMES,
     TARGET_EXTENSIONS,
     EXCLUDED_FILENAMES,
+    EXCLUDED_DIRS,
 )
 from scanner.content import scan_content, build_finding
 from scanner.suppress import load_suppressions, is_suppressed
@@ -133,7 +134,10 @@ def _scan_local(root: str, max_size: int, stop_event: threading.Event) -> Genera
     for dirpath, dirnames, filenames in os.walk(root):
         if stop_event.is_set():
             return
-        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+        dirnames[:] = [
+            d for d in dirnames
+            if not d.startswith(".") and d not in EXCLUDED_DIRS
+        ]
         for fname in filenames:
             if stop_event.is_set():
                 return
@@ -289,8 +293,11 @@ def _walk(
                 if _skipping:
                     if ev[1] == resume_from:
                         _skipping = False
-                    skipped += 1
-                    continue
+                        # Fall through — re-process this file in case it wasn't
+                        # fully written to the DB before the previous scan stopped.
+                    else:
+                        skipped += 1
+                        continue
                 file_q.put(ev)
         else:
             for ev in _scan_local(cfg.root, cfg.max_size, cfg.stop_event):
@@ -299,8 +306,11 @@ def _walk(
                 if _skipping:
                     if ev[1] == resume_from:
                         _skipping = False
-                    skipped += 1
-                    continue
+                        # Fall through — re-process this file in case it wasn't
+                        # fully written to the DB before the previous scan stopped.
+                    else:
+                        skipped += 1
+                        continue
                 file_q.put(ev)
     finally:
         if skipped > 0:
@@ -431,23 +441,38 @@ def scan_path(
     db_file   = os.path.join(reports_dir, f"LeakLens_{timestamp}.db")
     ckpt_file = _ckpt_path(root, reports_dir)
 
-    # ── SQLite setup ──────────────────────────────────────────────────────────
-    _db_conn = _db.open_db(db_file)
-    try:
-        _db.insert_scan(_db_conn, scan_id, root, int(time.time()))
-    except Exception as e:
-        _log.warning("Failed to insert scan record: %s", e)
-    _db_pending = 0
-
     # ── Checkpoint / resume ───────────────────────────────────────────────────
+    # Resolve before opening DB so we know which DB file to continue into.
     _resume_from: str | None = None
+    _resuming_existing_db = False
     if resume:
-        _resume_from, _ckpt_scanned = _load_ckpt(ckpt_file)
-        if _resume_from:
+        _resume_from, _ckpt_scanned, _ckpt_db_file, _ckpt_scan_id = _load_ckpt(ckpt_file)
+        if _resume_from and _ckpt_db_file and os.path.isfile(_ckpt_db_file):
+            # Continue writing findings to the same DB — keeps the scan atomic.
+            db_file  = _ckpt_db_file
+            scan_id  = _ckpt_scan_id or scan_id
+            _resuming_existing_db = True
             yield {
                 "type": "log",
                 "message": f"Resuming scan — checkpoint found, skipping up to {_ckpt_scanned} files",
             }
+        elif _resume_from:
+            yield {
+                "type": "log",
+                "message": (
+                    f"Resuming — original DB not found, starting fresh DB "
+                    f"but skipping up to {_ckpt_scanned} already-scanned files"
+                ),
+            }
+
+    # ── SQLite setup ──────────────────────────────────────────────────────────
+    _db_conn = _db.open_db(db_file)
+    _db_pending = 0
+    if not _resuming_existing_db:
+        try:
+            _db.insert_scan(_db_conn, scan_id, root, int(time.time()))
+        except Exception as e:
+            _log.warning("Failed to insert scan record: %s", e)
 
     # ── SMB share root used for relative paths ────────────────────────────────
     if is_smb:
@@ -514,18 +539,14 @@ def scan_path(
             # Persist findings to SQLite
             if ev_type == "finding":
                 try:
-                    _db_conn.execute(
-                        "INSERT INTO findings "
-                        "(scan_id, risk_level, confidence, file_name, full_path, data) "
-                        "VALUES (?, ?, ?, ?, ?, ?)",
-                        (
-                            scan_id,
-                            item["riskLevel"],
-                            item.get("confidence"),
-                            item.get("fileName"),
-                            item.get("fullPath"),
-                            json.dumps(item),
-                        ),
+                    _db.insert_finding(
+                        _db_conn,
+                        scan_id,
+                        item["riskLevel"],
+                        item.get("confidence"),
+                        item.get("fileName"),
+                        item.get("fullPath"),
+                        json.dumps(item),
                     )
                     _db_pending += 1
                     if _db_pending >= _DB_COMMIT_EVERY:
@@ -542,7 +563,7 @@ def scan_path(
                     _ckpt_last_path = cur
                 if (scanned - _ckpt_last_scanned >= _CHECKPOINT_EVERY
                         and _ckpt_last_path):
-                    _save_ckpt(ckpt_file, _ckpt_last_path, scanned)
+                    _save_ckpt(ckpt_file, _ckpt_last_path, scanned, db_file, scan_id)
                     _ckpt_last_scanned = scanned
 
             yield item

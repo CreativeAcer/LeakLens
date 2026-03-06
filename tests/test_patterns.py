@@ -206,9 +206,14 @@ def test_ps_secure_string(text, should_match):
 
 
 @pytest.mark.parametrize("text,should_match", [
-    ("New-Object PSCredential(", True),
-    ("# PSCredential is a class", False),  # not followed by (
-    # Note: [PSCredential]($user) uses cast syntax — the ( is after ], not PSCredential
+    # Must have a quoted string literal as the first argument
+    ('New-Object PSCredential("admin", $securePass)', True),
+    ("New-Object PSCredential('DOMAIN\\\\user', $pass)", True),
+    # No quoted arg — dynamic usage, should NOT fire
+    ("New-Object PSCredential(", False),         # no quoted arg — could be dynamic
+    ("PSCredential($env:USER, $pass)", False),   # purely dynamic
+    ("# PSCredential is a class", False),         # not followed by (
+    # Cast syntax — the ( is after ], not after PSCredential
 ])
 def test_hardcoded_pscredential(text, should_match):
     pattern = next(p for p in COMPILED_PATTERNS if p["id"] == "hardcoded_pscredential")

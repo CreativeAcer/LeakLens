@@ -185,38 +185,80 @@ def _list_shares_impacket(host: str, username: str = None, password: str = None,
     return shares
 
 
+# ─── Win32 credential helpers (Windows only) ─────────────────────────────────
+
+def _wnet_connect(host: str, username: str, password: str | None,
+                  domain: str | None) -> bool:
+    """
+    Connect to \\\\host\\IPC$ using the Win32 WNetAddConnection2 API.
+    Credentials are passed through the API — not exposed on the command line.
+    Returns True on success, False if the API is unavailable or the call fails.
+    """
+    try:
+        import ctypes
+        import ctypes.wintypes
+
+        class NETRESOURCEW(ctypes.Structure):
+            _fields_ = [
+                ("dwScope",       ctypes.wintypes.DWORD),
+                ("dwType",        ctypes.wintypes.DWORD),
+                ("dwDisplayType", ctypes.wintypes.DWORD),
+                ("dwUsage",       ctypes.wintypes.DWORD),
+                ("lpLocalName",   ctypes.wintypes.LPWSTR),
+                ("lpRemoteName",  ctypes.wintypes.LPWSTR),
+                ("lpComment",     ctypes.wintypes.LPWSTR),
+                ("lpProvider",    ctypes.wintypes.LPWSTR),
+            ]
+
+        nr = NETRESOURCEW()
+        nr.dwType = 0  # RESOURCETYPE_ANY
+        nr.lpRemoteName = f"\\\\{host}\\IPC$"
+
+        user = f"{domain}\\{username}" if domain else username
+        rc = ctypes.windll.mpr.WNetAddConnection2W(
+            ctypes.byref(nr), password or "", user, 0
+        )
+        return rc == 0
+    except (AttributeError, OSError):
+        # ctypes.windll is not available on non-Windows, or mpr.dll is missing.
+        return False
+
+
 def _list_shares_netview_with_creds(host: str, username: str, password: str = None,
                                      domain: str = None) -> list[str]:
     """
-    Enumerate shares on Windows using 'net use' to establish an authenticated
-    session against IPC$, then 'net view' to list shares.
-    No external packages required — works on every Windows version.
-    The IPC$ connection is always cleaned up in a finally block.
+    Enumerate shares on Windows using an authenticated session.
+
+    Uses WNetAddConnection2 (Win32 API) to establish the IPC$ session so that
+    credentials are passed through the API rather than appearing on the command
+    line of 'net use'.  Falls back to 'net use' only if the Win32 call fails
+    (e.g., on very old Windows versions where mpr.dll behaves differently).
+    The IPC$ session is always cleaned up in a finally block.
     """
     import subprocess
 
     unc_ipc = f"\\\\{host}\\IPC$"
     user_arg = f"{domain}\\{username}" if domain else username
 
-    # Establish authenticated session
-    auth_cmd = ["net", "use", unc_ipc, password or "", f"/user:{user_arg}"]
-    try:
+    wnet_ok = _wnet_connect(host, username, password, domain)
+
+    if not wnet_ok:
+        # Fall back: password appears on the 'net use' command line.
+        # This is unavoidable without the Win32 API (mpr.dll WNetAddConnection2).
         auth_result = subprocess.run(
-            auth_cmd, capture_output=True, timeout=15,
+            ["net", "use", unc_ipc, password or "", f"/user:{user_arg}"],
+            capture_output=True, timeout=15,
         )
         oem = "oem" if os.name == "nt" else "utf-8"
         auth_out = (auth_result.stdout + auth_result.stderr).decode(oem, errors="replace")
-    except subprocess.TimeoutExpired:
-        raise RuntimeError("Connection to host timed out.")
-
-    if auth_result.returncode != 0:
-        msg = auth_out.strip().splitlines()[-1] if auth_out.strip() else "Authentication failed"
-        raise RuntimeError(f"Authentication failed: {msg}")
+        if auth_result.returncode != 0:
+            msg = auth_out.strip().splitlines()[-1] if auth_out.strip() else "Authentication failed"
+            raise RuntimeError(f"Authentication failed: {msg}")
 
     try:
         return _list_shares_netview(host)
     finally:
-        # Always clean up the IPC$ session
+        # Always clean up the IPC$ session, regardless of how it was established.
         subprocess.run(
             ["net", "use", unc_ipc, "/delete", "/yes"],
             capture_output=True, timeout=10,
@@ -273,7 +315,6 @@ def _list_shares_netview(host: str) -> list[str]:
         msg = output.strip().splitlines()[-1] if output.strip() else "Unknown error"
         raise RuntimeError(f"net view failed: {msg}")
 
-
     return shares
 
 
@@ -281,25 +322,47 @@ def _list_shares_binary(host: str, username: str = None, password: str = None,
                          domain: str = None, port: int = 445) -> list[str]:
     """Enumerate shares by shelling out to the smbclient binary (Linux/macOS)."""
     import subprocess
+    import tempfile
 
     cmd = ["smbclient", "-L", f"//{host}", "-p", str(port)]
 
-    if username:
-        cred = username
-        if password is not None:
-            cred += f"%{password}"
-        cmd.extend(["-U", cred])
-        if domain:
-            cmd.extend(["-W", domain])
-    else:
-        cmd.extend(["-N", "-U", "%"])  # null / anonymous session
-
+    cred_path = None
     try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=15
-        )
-    except subprocess.TimeoutExpired:
-        raise RuntimeError("Connection to host timed out.")
+        if username:
+            # Write credentials to a temp file to avoid exposing them in process args.
+            # On Linux, process command lines are visible to any user via /proc/PID/cmdline.
+            fd, cred_path = tempfile.mkstemp(suffix=".cred")
+            try:
+                with os.fdopen(fd, "w") as cf:
+                    cf.write(f"username = {username}\n")
+                    cf.write(f"password = {password or ''}\n")
+                    if domain:
+                        cf.write(f"domain = {domain}\n")
+                os.chmod(cred_path, 0o600)
+            except OSError:
+                try:
+                    os.unlink(cred_path)
+                except OSError:
+                    pass
+                cred_path = None
+                raise
+            cmd.extend(["-A", cred_path])
+        else:
+            cmd.extend(["-N", "-U", "%"])  # null / anonymous session
+
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=15
+            )
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("Connection to host timed out.")
+
+    finally:
+        if cred_path:
+            try:
+                os.unlink(cred_path)
+            except OSError:
+                pass
 
     output = result.stdout + result.stderr
 

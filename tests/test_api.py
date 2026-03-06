@@ -80,6 +80,45 @@ def test_list_scans_empty(client, tmp_reports):
     assert json.loads(r.data) == []
 
 
+# ─── GET /api/scans/<scan_id> ─────────────────────────────────────────────────
+
+def test_get_scan_invalid_id(client):
+    r = client.get("/api/scans/bad;id")
+    assert r.status_code == 400
+
+
+def test_get_scan_not_found(client, tmp_reports):
+    r = client.get("/api/scans/20240101_120000")
+    assert r.status_code == 404
+
+
+def test_get_scan_returns_metadata(client, tmp_reports):
+    import sqlite3 as _sq
+    scan_id = "20240101_120000"
+    db_path = str(tmp_reports / f"LeakLens_{scan_id}.db")
+    conn = _sq.connect(db_path)
+    conn.executescript("""
+        CREATE TABLE scans (id TEXT PRIMARY KEY, scan_path TEXT, scan_date TEXT,
+                            scanned INTEGER, hits INTEGER, completed INTEGER, started_at INTEGER);
+        CREATE TABLE findings (id INTEGER PRIMARY KEY AUTOINCREMENT, scan_id TEXT,
+                               risk_level TEXT, confidence INTEGER,
+                               file_name TEXT, full_path TEXT, data TEXT);
+    """)
+    conn.execute(
+        "INSERT INTO scans VALUES (?,?,?,?,?,?,?)",
+        (scan_id, "/tmp/test", "2024-01-01 12:00:00", 42, 3, 1, 1704067200),
+    )
+    conn.commit()
+    conn.close()
+
+    r = client.get(f"/api/scans/{scan_id}")
+    assert r.status_code == 200
+    data = json.loads(r.data)
+    assert data["id"] == scan_id
+    assert data["scan_path"] == "/tmp/test"
+    assert data["scanned"] == 42
+
+
 # ─── GET /api/findings — input validation ────────────────────────────────────
 
 def test_findings_missing_scan_id(client):

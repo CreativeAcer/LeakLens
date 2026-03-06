@@ -84,6 +84,24 @@ def insert_scan(conn: sqlite3.Connection, scan_id: str, scan_path: str,
     conn.commit()
 
 
+def insert_finding(
+    conn: sqlite3.Connection,
+    scan_id: str,
+    risk_level: str,
+    confidence: int | None,
+    file_name: str | None,
+    full_path: str | None,
+    data_json: str,
+) -> None:
+    """Insert a single finding row. Caller is responsible for committing."""
+    conn.execute(
+        "INSERT INTO findings "
+        "(scan_id, risk_level, confidence, file_name, full_path, data) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (scan_id, risk_level, confidence, file_name, full_path, data_json),
+    )
+
+
 def update_scan_complete(conn: sqlite3.Connection, scan_id: str,
                          scanned: int, hits: int) -> None:
     """Mark a scan as completed and record final file/hit counts."""
@@ -197,7 +215,15 @@ def get_all_scans(reports_dir: str) -> list:
         db_path = os.path.join(reports_dir, fname)
         try:
             conn = open_db_readonly(db_path)
-            row = conn.execute("SELECT * FROM scans LIMIT 1").fetchone()
+            # Derive scan_id from the filename — more reliable than LIMIT 1 if the
+            # DB ever ends up with multiple rows (e.g. after a schema migration).
+            scan_id_from_file = fname[len("LeakLens_"):-len(".db")]
+            row = conn.execute(
+                "SELECT * FROM scans WHERE id = ?", (scan_id_from_file,)
+            ).fetchone()
+            if not row:
+                # Fallback: first row in the table (handles hand-created DBs)
+                row = conn.execute("SELECT * FROM scans LIMIT 1").fetchone()
             if row:
                 scans.append(dict(row))
             conn.close()

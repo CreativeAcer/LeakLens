@@ -10,6 +10,7 @@ from scanner.db import (
     open_db,
     open_db_readonly,
     insert_scan,
+    insert_finding,
     update_scan_complete,
     query_findings,
     get_scan_meta,
@@ -90,6 +91,40 @@ def test_update_scan_complete(conn, db_path):
     assert row[0] == 100
     assert row[1] == 5
     assert row[2] == 1
+
+
+# ─── insert_finding ───────────────────────────────────────────────────────────
+
+def test_insert_finding(conn, db_path):
+    _seed_scan(conn)
+    insert_finding(conn, "20240101_120000", "HIGH", 9, "id_rsa", "/tmp/id_rsa",
+                   json.dumps({"riskLevel": "HIGH", "fileName": "id_rsa"}))
+    conn.commit()
+    row = conn.execute("SELECT * FROM findings WHERE scan_id = '20240101_120000'").fetchone()
+    assert row is not None
+    assert row[2] == "HIGH"       # risk_level
+    assert row[3] == 9            # confidence
+    assert row[4] == "id_rsa"     # file_name
+    assert row[5] == "/tmp/id_rsa"  # full_path
+    data = json.loads(row[6])
+    assert data["riskLevel"] == "HIGH"
+
+
+def test_insert_finding_no_commit_until_caller(conn, db_path):
+    """insert_finding must not auto-commit — caller controls transaction batching."""
+    _seed_scan(conn)
+    insert_finding(conn, "20240101_120000", "LOW", 3, "hash.txt", "/tmp/hash.txt",
+                   json.dumps({"riskLevel": "LOW"}))
+    # Without conn.commit() a readonly connection on the same file sees 0 rows
+    ro = open_db_readonly(db_path)
+    count = ro.execute("SELECT COUNT(*) FROM findings").fetchone()[0]
+    ro.close()
+    assert count == 0   # not committed yet
+    conn.commit()
+    ro2 = open_db_readonly(db_path)
+    count2 = ro2.execute("SELECT COUNT(*) FROM findings").fetchone()[0]
+    ro2.close()
+    assert count2 == 1
 
 
 # ─── query_findings ───────────────────────────────────────────────────────────

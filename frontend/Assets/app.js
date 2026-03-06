@@ -574,17 +574,40 @@
   }
 
   async function openReport(scanId) {
+    // Load metadata and first findings page in parallel, then page through the rest.
+    // This avoids fetching the entire scan as one giant JSON blob, keeping individual
+    // responses small regardless of how many findings a scan produced.
+    const PER_PAGE = 200;
     try {
-      const res = await fetch(`${API}/scans/${encodeURIComponent(scanId)}/export`);
-      if (!res.ok) { alert('Could not load report.'); return; }
-      const report = await res.json();
+      const [metaRes, firstRes] = await Promise.all([
+        fetch(`${API}/scans/${encodeURIComponent(scanId)}`),
+        fetch(`${API}/findings?scan_id=${encodeURIComponent(scanId)}&page=0&per_page=${PER_PAGE}`),
+      ]);
+      if (!metaRes.ok) { alert('Could not load report metadata.'); return; }
+      if (!firstRes.ok) { alert('Could not load report findings.'); return; }
 
-      findings         = report.findings || [];
+      const meta      = await metaRes.json();
+      const firstPage = await firstRes.json();
+      const total          = firstPage.total;
+      const loadedFindings = [...firstPage.findings];
+
+      // Fetch remaining pages sequentially
+      const totalPages = Math.ceil(total / PER_PAGE);
+      for (let p = 1; p < totalPages; p++) {
+        const r = await fetch(
+          `${API}/findings?scan_id=${encodeURIComponent(scanId)}&page=${p}&per_page=${PER_PAGE}`
+        );
+        if (!r.ok) break;
+        const d = await r.json();
+        loadedFindings.push(...d.findings);
+      }
+
+      findings         = loadedFindings;
       filteredFindings = [];
       riskCounts       = { HIGH: 0, MEDIUM: 0, LOW: 0 };
       findings.forEach(f => { riskCounts[f.riskLevel] = (riskCounts[f.riskLevel] || 0) + 1; });
 
-      document.getElementById('statScanned').textContent  = report.scanned || 0;
+      document.getElementById('statScanned').textContent  = meta.scanned || 0;
       document.getElementById('statFindings').textContent = findings.length;
       document.getElementById('statFindings').classList.toggle('has-hits', findings.length > 0);
       const badge = document.getElementById('findingsBadge');
@@ -593,7 +616,7 @@
       updateRiskBars();
       switchTab('findings');
       renderTable();
-      appendLog(`Loaded scan: ${report.scan_path || scanId} — ${findings.length} findings`, false);
+      appendLog(`Loaded scan: ${meta.scan_path || scanId} — ${findings.length} findings`, false);
     } catch (e) {
       alert('Could not load report: ' + e.message);
     }

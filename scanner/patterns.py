@@ -125,7 +125,9 @@ CONTENT_PATTERNS = [
     {
         "id": "hardcoded_pscredential",
         "name": "Hardcoded PSCredential",
-        "regex": r'(?i)PSCredential\s*\(',
+        # Require a quoted string literal as the first argument — avoids firing
+        # on legitimate dynamic usage like PSCredential($cred) or Get-Credential pipelines.
+        "regex": r'(?i)PSCredential\s*\(\s*["\']',
         "confidence": 6,
         "risk": "MEDIUM",
     },
@@ -262,6 +264,19 @@ DOCS_DIRS = {
 # Pattern IDs that are hash-only (low signal on their own — likely checksums, not credentials)
 # NTLM hashes are always credential hashes so they are intentionally excluded here
 HASH_PATTERN_IDS = {"md5_hash", "sha1_hash", "sha256_hash", "sha512_hash"}
+
+# Directory names to skip entirely during local walks.
+# These trees contain build artifacts, dependencies, and generated code that
+# produce high noise with minimal signal — and can be enormous (node_modules alone
+# can contain tens of thousands of files on a developer workstation).
+EXCLUDED_DIRS = {
+    "node_modules", "__pycache__",
+    "dist", "build", "target", "out",
+    ".terraform", ".tox",
+    ".mypy_cache", ".pytest_cache", ".ruff_cache",
+    "vendor", "bower_components",
+    ".gradle", ".m2",
+}
 
 # Filenames to skip content scanning — lockfiles and build artifacts are full of
 # hashes and base64 strings that produce massive hash-pattern noise with zero signal.
