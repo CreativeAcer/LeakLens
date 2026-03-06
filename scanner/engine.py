@@ -3,6 +3,7 @@ LeakLens scanner engine.
 Replaces backend/scanner.ps1 — pure Python, handles local paths and UNC/SMB paths.
 """
 
+import logging
 import os
 import datetime
 import json
@@ -12,6 +13,11 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Generator
+
+_log = logging.getLogger("leaklens.engine")
+
+# Project root — one level above this file (scanner/)
+_PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 from scanner.patterns import (
     FLAGGED_EXTENSIONS,
@@ -102,11 +108,12 @@ def _check_local_file(path: str, max_size: int):
     last_accessed = datetime.datetime.fromtimestamp(stat.st_atime).strftime("%Y-%m-%d %H:%M")
 
     owner = ""
-    try:
-        import pwd
-        owner = pwd.getpwuid(stat.st_uid).pw_name
-    except Exception:
-        pass
+    if os.name != "nt":
+        try:
+            import pwd
+            owner = pwd.getpwuid(stat.st_uid).pw_name
+        except Exception:
+            pass
 
     return build_finding(
         path=path,
@@ -341,12 +348,13 @@ def _worker(
                 hc = state["hit_count"]
             else:
                 hc = state["hit_count"]
+            start_time = state["scan_start_time"]
 
         if finding is not None:
             event_q.put(finding)
 
         if fc % 100 == 0 or fc == 1:
-            elapsed = max(0.001, time.time() - state["scan_start_time"])
+            elapsed = max(0.001, time.time() - start_time)
             rate    = round(fc / elapsed, 1)
             event_q.put({
                 "type":    "progress",
@@ -405,9 +413,8 @@ def scan_path(
         # .leaklensignore cannot be read from the remote share. Fall back to the
         # process working directory (typically the LeakLens installation root).
         # Place .leaklensignore there if suppression rules are needed for SMB scans.
-        cwd = os.getcwd()
-        suppressions = load_suppressions(cwd)
-        yield {"type": "log", "message": f"SMB scan: .leaklensignore loaded from {cwd}"}
+        suppressions = load_suppressions(_PROJECT_DIR)
+        yield {"type": "log", "message": f"SMB scan: .leaklensignore loaded from {_PROJECT_DIR}"}
     else:
         if not os.path.exists(root):
             yield {"type": "error", "message": f"Path does not exist or is not accessible: {root}"}
@@ -426,7 +433,10 @@ def scan_path(
 
     # ── SQLite setup ──────────────────────────────────────────────────────────
     _db_conn = _db.open_db(db_file)
-    _db.insert_scan(_db_conn, scan_id, root, int(time.time()))
+    try:
+        _db.insert_scan(_db_conn, scan_id, root, int(time.time()))
+    except Exception as e:
+        _log.warning("Failed to insert scan record: %s", e)
     _db_pending = 0
 
     # ── Checkpoint / resume ───────────────────────────────────────────────────
@@ -521,8 +531,8 @@ def scan_path(
                     if _db_pending >= _DB_COMMIT_EVERY:
                         _db_conn.commit()
                         _db_pending = 0
-                except Exception:
-                    pass
+                except Exception as e:
+                    _log.warning("Failed to write finding to database: %s", e)
 
             # Checkpoint on progress events
             elif ev_type == "progress":
@@ -547,42 +557,39 @@ def scan_path(
     if _db_pending > 0:
         try:
             _db_conn.commit()
-        except Exception:
+        except Exception as e:
+            _log.warning("Failed to commit remaining findings: %s", e)
+
+    try:
+        if fatal_error:
+            return
+
+        with _lock:
+            fc = _state["file_count"]
+            hc = _state["hit_count"]
+
+        yield {"type": "progress", "scanned": fc, "hits": hc, "current": "", "rate": 0}
+
+        # ── Finalise SQLite scan record ───────────────────────────────────────
+        try:
+            _db.update_scan_complete(_db_conn, scan_id, fc, hc)
+        except Exception as e:
+            _log.warning("Failed to mark scan complete in database: %s", e)
+
+        # Delete checkpoint on successful completion
+        try:
+            os.remove(ckpt_file)
+        except OSError:
             pass
 
-    if fatal_error:
+        yield {
+            "type":    "summary",
+            "scanned": fc,
+            "hits":    hc,
+            "scanId":  scan_id,
+        }
+    finally:
         try:
             _db_conn.close()
         except Exception:
             pass
-        return
-
-    with _lock:
-        fc = _state["file_count"]
-        hc = _state["hit_count"]
-
-    yield {"type": "progress", "scanned": fc, "hits": hc, "current": "", "rate": 0}
-
-    # ── Finalise SQLite scan record ───────────────────────────────────────────
-    try:
-        _db.update_scan_complete(_db_conn, scan_id, fc, hc)
-    except Exception:
-        pass
-
-    # Delete checkpoint on successful completion
-    try:
-        os.remove(ckpt_file)
-    except OSError:
-        pass
-
-    try:
-        _db_conn.close()
-    except Exception:
-        pass
-
-    yield {
-        "type":    "summary",
-        "scanned": fc,
-        "hits":    hc,
-        "scanId":  scan_id,
-    }

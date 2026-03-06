@@ -1,105 +1,151 @@
 @echo off
-title LeakLens
+setlocal enabledelayedexpansion
+
+REM -----------------------------------------------------------------------
+REM When double-clicked, Windows runs: cmd /c start.bat  (/c closes on exit)
+REM Relaunch with cmd /k so the window stays open no matter what happens.
+REM LEAKLENS_STARTED prevents infinite relaunching.
+REM -----------------------------------------------------------------------
+if not defined LEAKLENS_STARTED (
+    set LEAKLENS_STARTED=1
+    cmd /k ""%~f0""
+    exit /b
+)
+
+REM Set UTF-8 console so pip progress bar characters do not corrupt cmd parsing
 chcp 65001 >nul
+
+title LeakLens
 echo.
 echo  =========================================================
 echo   LeakLens - Credential Exposure Scanner
 echo  =========================================================
 echo.
 
-:: --- Locate Python ─────────────────────────────────────────────────────────
+REM -----------------------------------------------------------------------
+REM Locate Python
+REM -----------------------------------------------------------------------
+set PYTHON=
 where py >nul 2>&1
-if %ERRORLEVEL% EQU 0 (
-    set PYTHON=py
-) else (
+if !ERRORLEVEL! EQU 0 set PYTHON=py
+if not defined PYTHON (
     where python >nul 2>&1
-    if %ERRORLEVEL% EQU 0 (
-        set PYTHON=python
-    ) else (
-        echo  [ERROR] Python is not installed or not in PATH.
-        echo.
-        echo  Please install Python 3.11+ from https://www.python.org
-        echo  Make sure to check "Add Python to PATH" during installation.
-        echo.
-        pause
-        exit /b 1
-    )
+    if !ERRORLEVEL! EQU 0 set PYTHON=python
+)
+if not defined PYTHON (
+    echo  [ERROR] Python is not installed or not in PATH.
+    echo.
+    echo  Please install Python 3.11+ from https://www.python.org
+    echo  Make sure to check "Add Python to PATH" during installation.
+    goto :fail
 )
 
-:: --- Check Python version (require 3.11+) ──────────────────────────────────
-for /f "tokens=2 delims= " %%v in ('%PYTHON% --version 2^>^&1') do set PY_VER_FULL=%%v
-for /f "tokens=1,2 delims=." %%a in ("%PY_VER_FULL%") do (
-    set PY_MAJOR=%%a
-    set PY_MINOR=%%b
+REM -----------------------------------------------------------------------
+REM Check Python version (3.11+)
+REM -----------------------------------------------------------------------
+for /f "tokens=2" %%v in ('!PYTHON! --version 2^>^&1') do set PY_VER_STR=%%v
+for /f "tokens=1,2 delims=." %%a in ("!PY_VER_STR!") do (
+    set /a PY_MAJ=%%a
+    set /a PY_MIN=%%b
 )
-if %PY_MAJOR% LSS 3 (
-    echo  [ERROR] Python 3.11 or higher is required. Found: %PY_VER_FULL%
-    echo.
-    pause
-    exit /b 1
-)
-if %PY_MAJOR% EQU 3 if %PY_MINOR% LSS 11 (
-    echo  [ERROR] Python 3.11 or higher is required. Found: %PY_VER_FULL%
-    echo.
-    pause
-    exit /b 1
-)
-echo  [OK] Python %PY_VER_FULL% found
+if !PY_MAJ! LSS 3 goto :python_old
+if !PY_MAJ! EQU 3 if !PY_MIN! LSS 11 goto :python_old
+goto :python_ok
+:python_old
+echo  [ERROR] Python 3.11 or higher is required. Found: !PY_VER_STR!
+echo.
+goto :fail
+:python_ok
+echo  [OK] Python !PY_VER_STR! found
 
-:: --- Ensure pip is available ────────────────────────────────────────────────
-%PYTHON% -m pip --version >nul 2>&1
-if %ERRORLEVEL% NEQ 0 (
+REM -----------------------------------------------------------------------
+REM Ensure pip is available
+REM -----------------------------------------------------------------------
+!PYTHON! -m pip --version >nul 2>&1
+if !ERRORLEVEL! NEQ 0 (
     echo  [*] pip not found, bootstrapping...
-    %PYTHON% -m ensurepip --upgrade >nul 2>&1
-    if %ERRORLEVEL% NEQ 0 (
+    !PYTHON! -m ensurepip --upgrade
+    if !ERRORLEVEL! NEQ 0 (
+        echo.
         echo  [ERROR] Could not bootstrap pip. Please install pip manually.
-        pause
-        exit /b 1
+        goto :fail
     )
 )
 
-:: --- Install core dependencies ──────────────────────────────────────────────
+REM -----------------------------------------------------------------------
+REM Install core dependencies
+REM -----------------------------------------------------------------------
 echo.
 echo  [*] Installing core dependencies...
-%PYTHON% -m pip install -r requirements.txt --no-warn-script-location -q
-if %ERRORLEVEL% NEQ 0 (
-    echo  [ERROR] Failed to install core dependencies.
-    echo  Try running manually: pip install -r requirements.txt
-    pause
-    exit /b 1
-)
+!PYTHON! -m pip install -r requirements.txt --no-warn-script-location
+set DEPS_RC=!ERRORLEVEL!
+if !DEPS_RC! NEQ 0 goto :deps_fail
 echo  [OK] Core dependencies ready
-
-:: --- Install impacket (required for SMB share enumeration on Windows) ────────
+goto :deps_done
+:deps_fail
 echo.
-echo  [*] Installing impacket for SMB share enumeration...
-%PYTHON% -m pip install impacket --prefer-binary --no-warn-script-location -q
-if %ERRORLEVEL% NEQ 0 (
-    echo  [WARN] impacket could not be installed automatically.
-    echo.
-    echo  SMB share enumeration (Discover Shares button) will be unavailable.
-    echo  Scanning a known UNC path (e.g. \\server\share) still works without it.
-    echo.
-    echo  To enable share enumeration later, run:
-    echo    pip install impacket --prefer-binary
-    echo.
-    echo  Common cause on newer Python versions: no pre-built wheel available yet.
-    echo  Check https://github.com/fortra/impacket for compatibility updates.
-    echo.
-    timeout /t 5 /nobreak >nul
-) else (
-    echo  [OK] impacket ready
-)
+echo  [ERROR] Failed to install core dependencies.
+echo  Try running manually: pip install -r requirements.txt
+goto :fail
+:deps_done
 
-:: --- Create reports directory ────────────────────────────────────────────────
+REM -----------------------------------------------------------------------
+REM Check impacket (optional - enables credential-based share enumeration)
+REM
+REM NOTE: impacket has no binary wheels on PyPI. Installing from source fails
+REM on Windows because the source tarball contains filenames that Windows
+REM rejects during extraction. We therefore only check if it is already
+REM present (e.g. installed by the user separately) and do not attempt
+REM an automatic install.
+REM
+REM Without impacket, share enumeration falls back to the built-in
+REM net view command, which works for the current Windows session.
+REM -----------------------------------------------------------------------
+echo.
+echo  [*] Checking impacket for SMB share enumeration...
+!PYTHON! -c "import impacket" >nul 2>&1
+if !ERRORLEVEL! EQU 0 goto :impacket_found
+echo  [INFO] impacket not found - share enumeration will use net view.
+echo  net view works for shares your current Windows session can access.
+echo  For credential-based enumeration install impacket separately:
+echo    pip install impacket --prefer-binary
+goto :impacket_done
+:impacket_found
+echo  [OK] impacket found - full credential-based share enumeration available
+:impacket_done
+
+REM -----------------------------------------------------------------------
+REM Create reports directory
+REM -----------------------------------------------------------------------
 if not exist "reports" mkdir reports
 
-:: --- Open browser after short delay ─────────────────────────────────────────
-start /b cmd /c "timeout /t 2 /nobreak >nul && start "" http://localhost:3000"
-
-:: --- Start server (blocking) ─────────────────────────────────────────────────
+REM -----------------------------------------------------------------------
+REM Open browser then start server
+REM -----------------------------------------------------------------------
+start /b cmd /c "timeout /t 2 /nobreak >nul && start http://localhost:3000"
 echo.
 echo  [*] Starting LeakLens at http://localhost:3000
 echo      Press Ctrl+C to stop.
 echo.
-%PYTHON% leaklens.py
+!PYTHON! leaklens.py
+set SERVER_RC=!ERRORLEVEL!
+if !SERVER_RC! NEQ 0 goto :server_fail
+goto :done
+:server_fail
+echo.
+echo  [ERROR] LeakLens stopped unexpectedly (exit code !SERVER_RC!).
+echo  Check the output above for details.
+goto :fail
+
+:fail
+echo.
+echo  =========================================================
+echo   Startup failed. Read the output above for details.
+echo  =========================================================
+goto :done
+
+:done
+echo.
+echo  Press any key to close this window...
+pause >nul
+exit

@@ -74,7 +74,7 @@ def scan():
 
         data = request.get_json(silent=True) or {}
         scan_path_val = data.get("scanPath", "").strip()
-        max_file_size_mb = int(data.get("maxFileSizeMB", 10))
+        max_file_size_mb = max(1, min(500, int(data.get("maxFileSizeMB", 10))))
         workers = max(1, min(16, int(data.get("workers", 8))))
         resume = bool(data.get("resume", False))
         smb_port = max(1, min(65535, int(data.get("smbPort", 445))))

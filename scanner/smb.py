@@ -3,6 +3,7 @@ SMB/UNC path helpers for LeakLens.
 Requires: smbprotocol (pip install smbprotocol)
 """
 
+import os
 import re
 import threading
 import time
@@ -125,26 +126,45 @@ def list_shares(host: str, username: str = None, password: str = None,
     List visible shares on the given SMB host.
 
     Tries in order:
-      1. impacket (pure Python, cross-platform) — install with: pip install impacket
-      2. smbclient binary (Linux/macOS, requires: apt install smbclient)
+      1. impacket          — pure Python, cross-platform, supports explicit credentials
+      2. net view          — Windows built-in, no install needed, uses current session auth
+      3. smbclient binary  — Linux/macOS (apt install smbclient / brew install samba)
 
-    Raises RuntimeError if neither is available or enumeration fails.
+    Raises RuntimeError if no method is available or enumeration fails.
     """
-    # 1. Pure-Python path via impacket (works on Windows, Linux, macOS)
+    import shutil
+    import platform
+    on_windows = platform.system() == "Windows"
+
+    # 1. impacket (all platforms, supports explicit credentials)
     try:
         return _list_shares_impacket(host, username, password, domain, port)
     except ImportError:
-        pass  # impacket not installed — try binary fallback
+        pass
 
-    # 2. Binary fallback (Samba smbclient, typically Linux/macOS)
-    import shutil
+    # 2. net view (Windows built-in, no install required)
+    #    Only usable when no explicit credentials are provided — net view uses the
+    #    current Windows session and silently ignores any username/password passed to it.
+    if on_windows and not username and shutil.which("net"):
+        return _list_shares_netview(host)
+
+    # 3. smbclient binary (Linux/macOS, supports explicit credentials)
     if shutil.which("smbclient"):
         return _list_shares_binary(host, username, password, domain, port)
 
+    # Credentials were supplied but no method that honours them is available.
+    if on_windows and username:
+        raise RuntimeError(
+            "Credential-based share enumeration on Windows requires impacket.\n"
+            "Install it with: pip install impacket --prefer-binary\n"
+            "Or leave Username blank to enumerate using your current Windows session."
+        )
+
     raise RuntimeError(
-        "Share enumeration requires either:\n"
-        "  pip install impacket  (cross-platform, including Windows)\n"
-        "or the smbclient binary  (Linux/macOS: apt install smbclient)"
+        "Share enumeration is unavailable. Options:\n"
+        "  Windows : pip install impacket --prefer-binary\n"
+        "  Linux   : apt install smbclient\n"
+        "  macOS   : brew install samba"
     )
 
 
@@ -170,6 +190,60 @@ def _list_shares_impacket(host: str, username: str = None, password: str = None,
         name = share["shi1_netname"].rstrip("\x00")
         if name:
             shares.append(name)
+    return shares
+
+
+def _list_shares_netview(host: str) -> list[str]:
+    """
+    Enumerate shares using the Windows built-in 'net view' command.
+    Uses the current Windows session credentials — no explicit cred support.
+    Falls back automatically when impacket is not installed.
+    """
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["net", "view", f"\\\\{host}", "/all"],
+            capture_output=True, timeout=15,
+        )
+        # net view outputs in the system OEM codepage (e.g. cp850), not UTF-8.
+        # Decode with errors="replace" so non-ASCII share names don't crash.
+        oem = "oem" if os.name == "nt" else "utf-8"
+        result_stdout = result.stdout.decode(oem, errors="replace")
+        result_stderr = result.stderr.decode(oem, errors="replace")
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("Connection to host timed out.")
+
+    output = result_stdout + result_stderr
+
+    # net view output (English locale):
+    #   Share name   Resource    Remark
+    #   -----------------------------------------------
+    #   NETLOGON                 Logon server share
+    #   SYSVOL                   Logon server share
+    #   The command completed successfully.
+    shares = []
+    in_list = False
+    for line in output.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("-"):
+            in_list = True
+            continue
+        if not in_list:
+            continue
+        if stripped.lower().startswith("the command"):
+            break
+        parts = stripped.split()
+        if parts:
+            shares.append(parts[0])
+
+    if not shares and result.returncode != 0:
+        msg = output.strip().splitlines()[-1] if output.strip() else "Unknown error"
+        raise RuntimeError(f"net view failed: {msg}")
+
+
     return shares
 
 
