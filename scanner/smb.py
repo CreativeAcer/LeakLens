@@ -127,7 +127,7 @@ def list_shares(host: str, username: str = None, password: str = None,
 
     Tries in order:
       1. impacket          — pure Python, cross-platform, supports explicit credentials
-      2. net view          — Windows built-in, no install needed, uses current session auth
+      2. net use + net view — Windows built-in (no install), supports explicit credentials
       3. smbclient binary  — Linux/macOS (apt install smbclient / brew install samba)
 
     Raises RuntimeError if no method is available or enumeration fails.
@@ -142,27 +142,19 @@ def list_shares(host: str, username: str = None, password: str = None,
     except ImportError:
         pass
 
-    # 2. net view (Windows built-in, no install required)
-    #    Only usable when no explicit credentials are provided — net view uses the
-    #    current Windows session and silently ignores any username/password passed to it.
-    if on_windows and not username and shutil.which("net"):
+    # 2. net use + net view (Windows built-in, supports explicit credentials)
+    if on_windows and shutil.which("net"):
+        if username:
+            return _list_shares_netview_with_creds(host, username, password, domain)
         return _list_shares_netview(host)
 
     # 3. smbclient binary (Linux/macOS, supports explicit credentials)
     if shutil.which("smbclient"):
         return _list_shares_binary(host, username, password, domain, port)
 
-    # Credentials were supplied but no method that honours them is available.
-    if on_windows and username:
-        raise RuntimeError(
-            "Credential-based share enumeration on Windows requires impacket.\n"
-            "Install it with: pip install impacket --prefer-binary\n"
-            "Or leave Username blank to enumerate using your current Windows session."
-        )
-
     raise RuntimeError(
         "Share enumeration is unavailable. Options:\n"
-        "  Windows : pip install impacket --prefer-binary\n"
+        "  Windows : Ensure 'net' is in PATH (built-in on all Windows versions)\n"
         "  Linux   : apt install smbclient\n"
         "  macOS   : brew install samba"
     )
@@ -191,6 +183,44 @@ def _list_shares_impacket(host: str, username: str = None, password: str = None,
         if name:
             shares.append(name)
     return shares
+
+
+def _list_shares_netview_with_creds(host: str, username: str, password: str = None,
+                                     domain: str = None) -> list[str]:
+    """
+    Enumerate shares on Windows using 'net use' to establish an authenticated
+    session against IPC$, then 'net view' to list shares.
+    No external packages required — works on every Windows version.
+    The IPC$ connection is always cleaned up in a finally block.
+    """
+    import subprocess
+
+    unc_ipc = f"\\\\{host}\\IPC$"
+    user_arg = f"{domain}\\{username}" if domain else username
+
+    # Establish authenticated session
+    auth_cmd = ["net", "use", unc_ipc, password or "", f"/user:{user_arg}"]
+    try:
+        auth_result = subprocess.run(
+            auth_cmd, capture_output=True, timeout=15,
+        )
+        oem = "oem" if os.name == "nt" else "utf-8"
+        auth_out = (auth_result.stdout + auth_result.stderr).decode(oem, errors="replace")
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("Connection to host timed out.")
+
+    if auth_result.returncode != 0:
+        msg = auth_out.strip().splitlines()[-1] if auth_out.strip() else "Authentication failed"
+        raise RuntimeError(f"Authentication failed: {msg}")
+
+    try:
+        return _list_shares_netview(host)
+    finally:
+        # Always clean up the IPC$ session
+        subprocess.run(
+            ["net", "use", unc_ipc, "/delete", "/yes"],
+            capture_output=True, timeout=10,
+        )
 
 
 def _list_shares_netview(host: str) -> list[str]:

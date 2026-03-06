@@ -105,13 +105,11 @@ echo.
 echo  [*] Checking impacket for SMB share enumeration...
 !PYTHON! -c "import impacket" >nul 2>&1
 if !ERRORLEVEL! EQU 0 goto :impacket_found
-echo  [INFO] impacket not found - share enumeration will use net view.
-echo  net view works for shares your current Windows session can access.
-echo  For credential-based enumeration install impacket separately:
-echo    pip install impacket --prefer-binary
+echo  [INFO] impacket not found - share enumeration will use built-in net use/net view.
+echo  This supports username and password on all Windows versions with no extra install.
 goto :impacket_done
 :impacket_found
-echo  [OK] impacket found - full credential-based share enumeration available
+echo  [OK] impacket found - using impacket for share enumeration
 :impacket_done
 
 REM -----------------------------------------------------------------------

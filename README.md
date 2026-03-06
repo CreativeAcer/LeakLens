@@ -62,7 +62,7 @@ with **confidence scoring**, **live browser streaming**, and **zero mounting req
 </div>
 
 Tools like truffleHog and gitleaks excel at scanning Git repositories and CI artifacts.
-LeakLens targets a different, often neglected attack surface: shared folders and internal file servers. It scans `\\server\share` directly, no mounting and streams confidence-scored findings to a browser in real time. 
+LeakLens targets a different, often neglected attack surface: shared folders and internal file servers. It scans `\\server\share` directly without mounting or drive letters, and streams confidence-scored findings to a browser in real time.
 
 Born from a pentest finding: a domain admin password sitting in a plaintext `.ps1` file on an open file share, readable by every user in the domain. LeakLens exists to find those before an attacker does.
 
@@ -85,7 +85,7 @@ The biggest difference being Native SMB/UNC (and ease of use - personal taste)
 
 Scans Windows file shares (and local paths) for exposed credentials:
 
-- Connects directly to SMB/UNC paths — no `net use`, no manual mount
+- Connects directly to SMB/UNC paths — no manual mount, no drive letter required
 - Enumerates shares on a server with one click
 - Scans text files for passwords, hashes, keys, tokens, and connection strings
 - Flags sensitive file types (`.pfx`, `.ppk`, `.kdbx`, `.pem`, ...) and risky filenames (`id_rsa`, `credentials`, `.env`, ...)
@@ -105,10 +105,16 @@ Scans Windows file shares (and local paths) for exposed credentials:
 - Dependencies (pinned):
   - `flask==3.1.3`
   - `smbprotocol==1.16.0`
-- Optional — required for **SMB share enumeration on Windows**:
-  - `impacket>=0.12.0` — LeakLens will prompt you to install this automatically on first run if it is missing
 
-> **Linux / macOS:** share enumeration uses the `smbclient` system binary (`apt install smbclient` / `brew install samba`). impacket is not required.
+**Share enumeration** — no extra packages required:
+
+| Platform | Method used automatically |
+|---|---|
+| Windows | Built-in `net use` + `net view` — supports credentials, works on all Windows versions |
+| Linux | `smbclient` binary — `apt install smbclient` |
+| macOS | `smbclient` binary — `brew install samba` |
+
+> **Optional:** `impacket>=0.12.0` is used first if installed (cross-platform, slightly faster). It is never required.
 
 ---
 
@@ -454,11 +460,109 @@ LeakLens/
 
 ---
 
-## How it works
+## Architecture
 
-`leaklens.py` starts a Flask server that serves the frontend and exposes `POST /api/scan`. When a scan starts, a walk thread traverses the target path — local or SMB — feeding a bounded queue. A pool of worker threads analyses files in parallel, matching patterns, applying confidence scoring and suppression rules, and emitting findings as JSON events. The browser reads these as **Server-Sent Events** streamed directly from the POST response body.
+### Share enumeration
 
-Findings are persisted to a per-scan SQLite database as they arrive, enabling the paginated `/api/findings` endpoint to serve historical data efficiently without re-loading JSON reports.
+Triggered by clicking **Discover Shares** in the UI (`POST /api/shares`).
+Three methods are tried in order — the first one that succeeds wins:
+
+```
+POST /api/shares  {host, username, password, domain}
+        │
+        ▼
+  list_shares()   [scanner/smb.py]
+        │
+        ├─ 1. impacket  (if installed — all platforms)
+        │        DCE/RPC over SMB named pipe (\srvsvc)
+        │        NetShareEnum Level 1
+        │        ↳ Fastest, pure Python, supports non-standard ports
+        │
+        ├─ 2. net use + net view  (Windows built-in — no extra packages)
+        │
+        │    With credentials:
+        │        net use \\server\IPC$ <password> /user:<domain\username>
+        │        net view \\server /all
+        │        net use \\server\IPC$ /delete /yes   ← always cleaned up
+        │
+        │    Without credentials (anonymous / current session):
+        │        net view \\server /all
+        │
+        └─ 3. smbclient binary  (Linux / macOS)
+                 smbclient -L //server -U user%pass
+                 ↳ Installed via: apt install smbclient / brew install samba
+
+        ↓
+  [{name: "share1"}, {name: "share2"}, ...]  → returned to browser
+```
+
+**Key design point:** steps 2 and 3 separate authentication from enumeration — Windows has no single built-in command that does both. `net use` establishes an authenticated SMB session to `IPC$` (the inter-process communication share used by Windows for RPC), which makes `net view` run under those credentials. The session is deleted immediately after enumeration regardless of success or failure.
+
+---
+
+### Scanning
+
+Triggered by clicking **Start Scan** (`POST /api/scan`).
+The response body is an **SSE stream** — findings appear in the browser as they are found, not after the scan completes.
+
+```
+POST /api/scan  {scanPath, workers, maxFileSizeMB, resume, ...}
+        │
+        ▼
+  scan_path()   [scanner/engine.py]
+        │
+        ├─ Walk thread  (1 thread)
+        │    Local path:  os.scandir() — recursive directory walk
+        │    SMB path:    smbclient.scandir() via walk_smb()
+        │                 ↳ Credit-limited semaphore (max 4 concurrent SMB ops)
+        │    ↓
+        │    Bounded file queue  (maxsize = workers × 8)
+        │    ↳ Back-pressures the walk if workers are busy
+        │
+        ├─ Worker threads  (N threads, default 8, max 16)
+        │    Pull file paths from the queue
+        │    │
+        │    ├─ Skip:    file too large / excluded extension / lockfile
+        │    ├─ Read:    open() for local / smbclient.open_file() for SMB
+        │    ├─ Match:   re.finditer() against 25 pre-compiled patterns
+        │    ├─ Score:   confidence 1–10
+        │    │           ↳ directory penalty (docs/, examples/, test/ → −3)
+        │    │           ↳ hash-only findings capped at LOW
+        │    ├─ Suppress: .leaklensignore rules checked per file + pattern
+        │    └─ Emit:   finding event → bounded event queue
+        │
+        ├─ SSE generator  (Flask main thread)
+        │    Pulls events from the event queue
+        │    Writes findings to SQLite  (batched every 50 rows, WAL mode)
+        │    Yields  "data: {...}\n\n"  to the HTTP response
+        │    ↳ Checkpoint written every 500 files (enables resume)
+        │
+        └─ Browser  (frontend/Assets/app.js)
+             fetch() + ReadableStream  (not EventSource — scan is a POST)
+             Decodes SSE lines, pushes findings into filteredFindings[]
+             Virtual-scrolled table — only visible rows rendered (rAF-throttled)
+             Live progress bar shows files/second rate
+```
+
+**Resume:** when `resume: true`, a checkpoint file maps each file's SHA-256 to its result. Already-processed files are skipped on re-scan. The SQLite database is opened in append mode against the original scan row.
+
+---
+
+### Data flow summary
+
+```
+Browser  ──POST /api/scan──►  Flask SSE stream
+                                     │
+                              Walk thread ──► file queue ──► Worker threads
+                                                                    │
+                                                             Event queue
+                                                                    │
+                              SSE generator ◄────────────────────────
+                                     │
+                              SQLite DB (reports/LeakLens_<id>.db)
+                                     │
+                              Browser ◄── paginated /api/findings (historical)
+```
 
 ---
 
